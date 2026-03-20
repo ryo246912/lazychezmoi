@@ -3,11 +3,12 @@ package ui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	colorFocus    = lipgloss.Color("62")  // blue-ish
-	colorInactive = lipgloss.Color("240") // gray
+	colorFocus    = lipgloss.Color("62")
+	colorInactive = lipgloss.Color("240")
 	colorGreen    = lipgloss.Color("42")
 	colorRed      = lipgloss.Color("196")
 	colorYellow   = lipgloss.Color("220")
+	colorModalBg  = lipgloss.Color("236")
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -59,4 +60,17 @@ var (
 
 	diffAddStyle = lipgloss.NewStyle().Foreground(colorGreen)
 	diffDelStyle = lipgloss.NewStyle().Foreground(colorRed)
+
+	modalStyle = lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(colorFocus).
+			Background(colorModalBg).
+			Padding(1, 2)
+
+	modalTitleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("255"))
+
+	modalBodyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("252"))
 )

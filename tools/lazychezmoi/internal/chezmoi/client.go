@@ -2,18 +2,23 @@ package chezmoi
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"lazychezmoi/internal/model"
 )
+
+const defaultTimeout = 30 * time.Second
 
 type Client struct {
 	Binary      string
 	Source      string
 	Destination string
 	Exclude     []string
+	Timeout     time.Duration // per-command timeout; 0 uses defaultTimeout
 }
 
 func New(binary, source, destination string, exclude []string) *Client {
@@ -83,11 +88,21 @@ func (c *Client) appendSourceDest(args *[]string) {
 }
 
 func (c *Client) run(args ...string) ([]byte, error) {
-	cmd := exec.Command(c.Binary, args...)
+	timeout := c.Timeout
+	if timeout == 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, c.Binary, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, fmt.Errorf("timed out after %s", timeout)
+		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
