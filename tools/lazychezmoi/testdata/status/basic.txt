@@ -1,0 +1,2 @@
+MM /home/user/.bashrc
+A  /home/user/.vimrc
