@@ -28,6 +28,15 @@ func (m Model) View() string {
 		contentH = 2
 	}
 
+	body := m.renderMain(contentH)
+	if m.state == stateConfirming {
+		body = lipgloss.Place(m.width, contentH, lipgloss.Center, lipgloss.Center, m.renderConfirmModal())
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+}
+
+func (m Model) renderMain(contentH int) string {
 	leftW := m.width / 3
 	rightW := m.width - leftW
 
@@ -41,67 +50,72 @@ func (m Model) View() string {
 
 	diffPane := m.renderDiffPane(rightW, contentH)
 
-	main := lipgloss.JoinHorizontal(lipgloss.Top, leftCol, diffPane)
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, main, footer)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftCol, diffPane)
 }
 
 func (m Model) renderHeader() string {
 	left := " lazychezmoi"
+
 	var middle string
 	if m.loadErr != nil {
 		middle = errorStyle.Render(fmt.Sprintf(" Error: %v", m.loadErr))
 	} else {
 		middle = fmt.Sprintf(" %d changed files", len(m.entries))
+		if queued := m.selectedTargetCount(); queued > 0 {
+			middle += fmt.Sprintf(" | %d queued", queued)
+		}
 	}
-	content := left + middle
-	return headerStyle.Width(m.width).Render(content)
+
+	return headerStyle.Width(m.width).Render(left + middle)
 }
 
 func (m Model) renderFooter() string {
 	var lines []string
 
 	switch m.state {
-	case stateConfirming:
-		entry := m.selectedEntry()
-		if entry != nil {
-			lines = append(lines, fmt.Sprintf("Apply %s? [y/N]", entry.TargetPath))
-		}
 	case stateApplying:
 		lines = append(lines, m.statusMsg)
-	case stateHelp:
-		// handled by renderHelp
+	case stateConfirming:
+		lines = append(lines, "y:confirm  n/esc:cancel")
 	default:
 		if m.statusMsg != "" {
 			lines = append(lines, m.statusMsg)
 		}
-		keys := " j/k:move  tab:switch pane  a:apply  e:edit  r:refresh  ?:help  q:quit"
-		if m.focusedPane == paneSrc {
-			keys = " j/k:move  tab:switch pane  e:edit source  r:refresh  ?:help  q:quit"
-		}
-		lines = append(lines, keys)
+		lines = append(lines, m.renderKeyHints())
 	}
 
 	return footerStyle.Width(m.width).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderKeyHints() string {
+	switch m.focusedPane {
+	case paneSrc:
+		return " j/k:move  tab:switch pane  e:edit source  r:refresh  ?:help  q:quit"
+	case paneDiff:
+		return " j/k/pgup/pgdn/g/G:scroll diff  tab:switch pane  r:refresh  ?:help  q:quit"
+	default:
+		return " j/k:move  space:queue  a:apply  e:edit target  tab:switch pane  r:refresh  ?:help  q:quit"
+	}
 }
 
 func (m Model) renderHelp() string {
 	help := `lazychezmoi - chezmoi TUI
 
 Keybindings:
-  j / ↓        Move down
-  k / ↑        Move up
-  tab          Switch pane (src ↔ target)
-  shift+tab    Switch pane (reverse)
-  a            Apply selected file (target pane only)
-  e            Open source file in $EDITOR
-  r            Refresh file list
-  ?            Toggle this help
-  q / ctrl+c   Quit
+  j / down      Move down in src/target or scroll diff
+  k / up        Move up in src/target or scroll diff
+  tab           Switch pane (target -> src -> diff)
+  shift+tab     Switch pane (reverse)
+  space         Toggle current target in the apply queue
+  a             Apply queued targets (or the current target)
+  e             Open the focused src/target file in $EDITOR
+  r             Refresh file list and diff cache
+  ?             Toggle this help
+  q / ctrl+c    Quit
 
 Diff pane scrolling:
-  pgdn/pgup    Scroll diff
-  g / G        Top / bottom of diff
+  pgdn/pgup     Page down / page up
+  g / G         Top / bottom of diff
 `
 	return help
 }
@@ -109,31 +123,28 @@ Diff pane scrolling:
 func (m Model) renderListPane(kind paneKind, width, height int) string {
 	focused := m.focusedPane == kind
 
-	var title string
-	switch kind {
-	case paneSrc:
-		title = "src"
-	case paneTarget:
+	title := "src"
+	if kind == paneTarget {
 		title = "target (apply queue)"
 	}
 
-	// Title bar
-	var titleBar string
-	if focused {
-		titleBar = titleStyle.Render(fmt.Sprintf(" %s (%d)", title, len(m.entries)))
-	} else {
-		titleBar = inactiveTitleStyle.Render(fmt.Sprintf(" %s (%d)", title, len(m.entries)))
+	titleText := fmt.Sprintf(" %s (%d)", title, len(m.entries))
+	if kind == paneTarget && m.selectedTargetCount() > 0 {
+		titleText = fmt.Sprintf(" %s (%d queued)", title, m.selectedTargetCount())
 	}
-	titleH := lipgloss.Height(titleBar)
 
-	// Inner area for list items (account for border: 2 lines vertical)
+	titleBar := inactiveTitleStyle.Render(titleText)
+	if focused {
+		titleBar = titleStyle.Render(titleText)
+	}
+
+	titleH := lipgloss.Height(titleBar)
 	listH := height - titleH - 2
 	if listH < 1 {
 		listH = 1
 	}
-	listW := width - 2 // account for border: 2 chars horizontal
+	listW := width - 2
 
-	// Compute scroll offset to keep cursor visible
 	offset := 0
 	if m.cursor >= listH {
 		offset = m.cursor - listH + 1
@@ -142,52 +153,55 @@ func (m Model) renderListPane(kind paneKind, width, height int) string {
 	var rows []string
 	for i := offset; i < len(m.entries) && i < offset+listH; i++ {
 		entry := m.entries[i]
-		row := m.renderEntryRow(entry, i, kind, i == m.cursor, focused, listW)
-		rows = append(rows, row)
+		rows = append(rows, m.renderEntryRow(entry, kind, i == m.cursor, focused, listW))
 	}
 
 	if len(m.entries) == 0 {
 		rows = append(rows, "  (no changed files)")
 	}
-
-	// Pad to listH
 	for len(rows) < listH {
 		rows = append(rows, "")
 	}
 
 	content := strings.Join(rows, "\n")
-
-	var borderStyle lipgloss.Style
+	borderStyle := unfocusedBorderStyle.Width(listW).Height(listH)
 	if focused {
 		borderStyle = focusedBorderStyle.Width(listW).Height(listH)
-	} else {
-		borderStyle = unfocusedBorderStyle.Width(listW).Height(listH)
 	}
 
-	body := borderStyle.Render(content)
-	return lipgloss.JoinVertical(lipgloss.Left, titleBar, body)
+	return lipgloss.JoinVertical(lipgloss.Left, titleBar, borderStyle.Render(content))
 }
 
-func (m Model) renderEntryRow(entry model.Entry, index int, kind paneKind, selected, focused bool, maxWidth int) string {
-	var path string
+func (m Model) renderEntryRow(entry model.Entry, kind paneKind, current, focused bool, maxWidth int) string {
+	path := entry.TargetPath
 	switch kind {
 	case paneSrc:
-		path = entry.SourcePath
-		if path == "" {
-			path = entry.TargetPath
+		if entry.SourcePath != "" {
+			path = entry.SourcePath
 		}
 	case paneTarget:
 		path = entry.TargetPath
 	}
 
-	label := m.renderStatusBadge(entry) + " " + truncatePath(path, maxWidth-8)
-
-	if selected && focused {
-		return selectedRowStyle.Width(maxWidth).Render(label)
-	} else if selected {
-		return inactiveSelectedRowStyle.Width(maxWidth).Render(label)
+	label := m.renderStatusBadge(entry)
+	if kind == paneTarget {
+		selection := "[ ]"
+		if m.isTargetSelected(entry.TargetPath) {
+			selection = "[x]"
+		}
+		label = selection + " " + label + " " + truncatePath(path, max(1, maxWidth-12))
+	} else {
+		label = label + " " + truncatePath(path, max(1, maxWidth-8))
 	}
-	return lipgloss.NewStyle().Width(maxWidth).Render(label)
+
+	switch {
+	case current && focused:
+		return selectedRowStyle.Width(maxWidth).Render(label)
+	case current:
+		return inactiveSelectedRowStyle.Width(maxWidth).Render(label)
+	default:
+		return lipgloss.NewStyle().Width(maxWidth).Render(label)
+	}
 }
 
 func (m Model) renderStatusBadge(entry model.Entry) string {
@@ -206,31 +220,81 @@ func (m Model) renderStatusBadge(entry model.Entry) string {
 
 func (m Model) renderDiffPane(width, height int) string {
 	title := " diff preview"
-	if m.diffLoading {
+	switch {
+	case m.diffLoading && m.diffContent != "":
+		title = " diff preview (refreshing...)"
+	case m.diffLoading:
 		title = " diff preview (loading...)"
 	}
-	titleBar := inactiveTitleStyle.Render(title)
-	titleH := lipgloss.Height(titleBar)
 
+	titleBar := inactiveTitleStyle.Render(title)
+	if m.focusedPane == paneDiff {
+		titleBar = titleStyle.Render(title)
+	}
+
+	titleH := lipgloss.Height(titleBar)
 	innerH := height - titleH - 2
+	if innerH < 1 {
+		innerH = 1
+	}
 	innerW := width - 2
+	if innerW < 1 {
+		innerW = 1
+	}
 
 	m.diffViewport.Width = innerW
 	m.diffViewport.Height = innerH
 
 	var content string
-	if m.diffErr != nil {
+	switch {
+	case m.diffErr != nil:
 		content = errorStyle.Render(fmt.Sprintf("Error: %v", m.diffErr))
-	} else if m.diffLoading {
+	case m.diffLoading && m.diffContent == "":
 		content = "Loading diff..."
-	} else if m.diffContent == "" && len(m.entries) == 0 {
+	case m.diffContent == "" && len(m.entries) == 0:
 		content = "(no files changed)"
-	} else {
+	case m.diffContent == "":
+		content = "Waiting for diff..."
+	default:
 		content = m.diffViewport.View()
 	}
 
-	body := unfocusedBorderStyle.Width(innerW).Height(innerH).Render(content)
-	return lipgloss.JoinVertical(lipgloss.Left, titleBar, body)
+	borderStyle := unfocusedBorderStyle.Width(innerW).Height(innerH)
+	if m.focusedPane == paneDiff {
+		borderStyle = focusedBorderStyle.Width(innerW).Height(innerH)
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, titleBar, borderStyle.Render(content))
+}
+
+func (m Model) renderConfirmModal() string {
+	count := len(m.confirmTargets)
+	title := fmt.Sprintf("Apply %d file?", count)
+	if count != 1 {
+		title = fmt.Sprintf("Apply %d files?", count)
+	}
+
+	lines := []string{
+		"This will run `chezmoi apply` for:",
+		"",
+	}
+	for i, targetPath := range m.confirmTargets {
+		if i >= 5 {
+			lines = append(lines, fmt.Sprintf("...and %d more", len(m.confirmTargets)-i))
+			break
+		}
+		lines = append(lines, truncatePath(targetPath, 64))
+	}
+	lines = append(lines, "", "y: confirm    n / esc: cancel")
+
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		modalTitleStyle.Render(title),
+		modalBodyStyle.Render(strings.Join(lines, "\n")),
+	)
+
+	modalWidth := min(80, max(36, m.width-8))
+	return modalStyle.Width(modalWidth).Render(body)
 }
 
 func truncatePath(path string, maxWidth int) string {

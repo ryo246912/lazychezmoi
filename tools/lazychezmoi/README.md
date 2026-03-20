@@ -5,9 +5,9 @@ A terminal UI for [chezmoi](https://www.chezmoi.io/) inspired by lazygit/gitui.
 ## Features
 
 - Browse changed dotfiles with a split-pane TUI
-- Preview diffs inline (colorized unified diff)
-- Apply individual files with confirmation
-- Open source files in your `$EDITOR`
+- Preview diffs inline with background caching and refresh
+- Apply one or many target files with confirmation
+- Open the focused source or target file in your `$EDITOR`
 - Refresh the file list at any time
 
 ## Installation
@@ -39,10 +39,12 @@ lazychezmoi [flags]
 |-----|--------|
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
-| `tab` | Switch pane (src ↔ target) |
+| `tab` | Switch pane (`target` → `src` → diff) |
 | `shift+tab` | Switch pane (reverse) |
-| `a` | Apply selected file (target pane only) |
-| `e` | Open source file in `$EDITOR` |
+| `space` | Toggle the current target in the apply queue |
+| `a` | Apply queued targets, or the current target if nothing is queued |
+| `e` | Open the focused `src` or `target` file in `$EDITOR` |
+| `pgup` / `pgdn` / `g` / `G` | Scroll the focused diff |
 | `r` | Refresh file list |
 | `?` | Toggle help |
 | `q` / `ctrl+c` | Quit |
