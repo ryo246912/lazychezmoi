@@ -10,11 +10,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"lazychezmoi/internal/diff"
+	gitmode "lazychezmoi/internal/git"
 	"lazychezmoi/internal/model"
 )
 
-type entriesLoadedMsg struct{ entries []model.Entry }
-type entriesErrMsg struct{ err error }
+type entriesLoadedMsg struct {
+	mode    listMode
+	entries []model.Entry
+}
+
+type entriesErrMsg struct {
+	mode listMode
+	err  error
+}
 
 type diffLoadedMsg struct {
 	targetPath string
@@ -36,11 +44,27 @@ type sourcePathMsg struct {
 	path       string
 }
 
-type applyDoneMsg struct{ targets []string }
+type snapshotReadyMsg struct {
+	mode       gitmode.SourceMode
+	requestID  int
+	rootDir    string
+	sourceDir  string
+	sourceRoot string
+}
 
-type applyErrMsg struct {
-	targets      []string
-	appliedCount int
+type snapshotErrMsg struct {
+	mode      gitmode.SourceMode
+	requestID int
+	err       error
+}
+
+type actionDoneMsg struct {
+	action pendingAction
+}
+
+type actionErrMsg struct {
+	action       pendingAction
+	completed    int
 	failedTarget string
 	err          error
 }
@@ -48,18 +72,59 @@ type applyErrMsg struct {
 type editorErrMsg struct{ err error }
 
 func (m Model) loadEntriesCmd() tea.Cmd {
+	currentMode := m.listMode
 	return func() tea.Msg {
-		entries, err := m.chezmoi.Status()
-		if err != nil {
-			return entriesErrMsg{err: err}
+		var (
+			entries []model.Entry
+			err     error
+		)
+
+		switch currentMode {
+		case listModeUnmanaged:
+			entries, err = m.chezmoi.Unmanaged()
+		default:
+			entries, err = m.chezmoi.Status()
 		}
-		return entriesLoadedMsg{entries: entries}
+		if err != nil {
+			return entriesErrMsg{mode: currentMode, err: err}
+		}
+		return entriesLoadedMsg{mode: currentMode, entries: entries}
 	}
 }
 
-func (m Model) loadDiffCmd(entry model.Entry, generation, requestID int) tea.Cmd {
+func (m Model) loadDiffCmd(entry model.Entry, generation, requestID int, applySourceMode gitmode.SourceMode, snapshotSource string) tea.Cmd {
 	return func() tea.Msg {
-		// Read current destination file (what exists on disk now)
+		if entry.Kind == model.EntryUnmanaged {
+			content, err := buildUnmanagedDiff(entry)
+			if err != nil {
+				return diffErrMsg{
+					targetPath: entry.TargetPath,
+					generation: generation,
+					requestID:  requestID,
+					err:        err,
+				}
+			}
+			return diffLoadedMsg{
+				targetPath: entry.TargetPath,
+				generation: generation,
+				requestID:  requestID,
+				content:    content,
+			}
+		}
+
+		client := m.chezmoi
+		if applySourceMode.RequiresSnapshot() {
+			if snapshotSource == "" {
+				return diffErrMsg{
+					targetPath: entry.TargetPath,
+					generation: generation,
+					requestID:  requestID,
+					err:        fmt.Errorf("%s snapshot is unavailable", applySourceMode),
+				}
+			}
+			client = client.WithSource(snapshotSource)
+		}
+
 		dst, err := os.ReadFile(entry.TargetPath)
 		if err != nil && !os.IsNotExist(err) {
 			return diffErrMsg{
@@ -70,8 +135,7 @@ func (m Model) loadDiffCmd(entry model.Entry, generation, requestID int) tea.Cmd
 			}
 		}
 
-		// Get rendered target (what apply would write)
-		rendered, err := m.chezmoi.Cat(entry.TargetPath)
+		rendered, err := client.Cat(entry.TargetPath)
 		if err != nil {
 			return diffErrMsg{
 				targetPath: entry.TargetPath,
@@ -81,8 +145,6 @@ func (m Model) loadDiffCmd(entry model.Entry, generation, requestID int) tea.Cmd
 			}
 		}
 
-		// Sanity check: if rendered is empty but destination has content,
-		// it likely means the template failed to render silently.
 		if len(rendered) == 0 && len(dst) > 0 && entry.TargetCode != model.StatusDeleted {
 			return diffErrMsg{
 				targetPath: entry.TargetPath,
@@ -94,10 +156,9 @@ func (m Model) loadDiffCmd(entry model.Entry, generation, requestID int) tea.Cmd
 
 		renderedName := "rendered target (after apply)"
 		if entry.SourcePath != "" {
-			renderedName = entry.SourcePath + " (rendered)"
+			renderedName = fmt.Sprintf("%s (%s)", entry.SourcePath, applySourceMode)
 		}
 
-		// Diff direction: destination (now) -> rendered target (after apply).
 		content := diff.Compute(entry.TargetPath, dst, renderedName, rendered)
 		return diffLoadedMsg{
 			targetPath: entry.TargetPath,
@@ -118,20 +179,78 @@ func (m Model) loadSourcePathCmd(targetPath string, generation int) tea.Cmd {
 	}
 }
 
-func (m Model) applyTargetsCmd(targets []string) tea.Cmd {
-	targets = append([]string(nil), targets...)
+func (m Model) prepareSnapshotCmd(mode gitmode.SourceMode, requestID int) tea.Cmd {
+	client := m.chezmoi
+	sourceRoot := m.sourceRoot
+	if sourceRoot == "" && client != nil && client.Source != "" {
+		sourceRoot = client.Source
+	}
+
 	return func() tea.Msg {
-		for i, targetPath := range targets {
-			if err := m.chezmoi.Apply(targetPath); err != nil {
-				return applyErrMsg{
-					targets:      targets,
-					appliedCount: i,
-					failedTarget: targetPath,
-					err:          err,
+		if sourceRoot == "" {
+			resolved, err := client.SourceDir()
+			if err != nil {
+				return snapshotErrMsg{mode: mode, requestID: requestID, err: err}
+			}
+			sourceRoot = resolved
+		}
+
+		snapshot, err := gitmode.New("", sourceRoot).Materialize(mode)
+		if err != nil {
+			return snapshotErrMsg{mode: mode, requestID: requestID, err: err}
+		}
+
+		return snapshotReadyMsg{
+			mode:       mode,
+			requestID:  requestID,
+			rootDir:    snapshot.RootDir,
+			sourceDir:  snapshot.SourceDir,
+			sourceRoot: sourceRoot,
+		}
+	}
+}
+
+func (m Model) runActionCmd(action pendingAction) tea.Cmd {
+	if action.kind == actionShell {
+		return runShellCommandCmd(action.command, m.shellEnv(action.entry), action)
+	}
+
+	mode := m.applySourceMode
+	snapshotSource := m.snapshotSource
+	client := m.chezmoi
+
+	return func() tea.Msg {
+		switch action.kind {
+		case actionApply:
+			if mode.RequiresSnapshot() {
+				if snapshotSource == "" {
+					return actionErrMsg{action: action, err: fmt.Errorf("%s snapshot is unavailable", mode)}
+				}
+				client = client.WithSource(snapshotSource)
+			}
+			for i, targetPath := range action.targets {
+				if err := client.Apply(targetPath); err != nil {
+					return actionErrMsg{
+						action:       action,
+						completed:    i,
+						failedTarget: targetPath,
+						err:          err,
+					}
 				}
 			}
+		case actionAdd:
+			if err := client.Add(action.entry.TargetPath); err != nil {
+				return actionErrMsg{action: action, failedTarget: action.entry.TargetPath, err: err}
+			}
+		case actionDelete:
+			if err := removeTargetPath(action.entry.TargetPath); err != nil {
+				return actionErrMsg{action: action, failedTarget: action.entry.TargetPath, err: err}
+			}
+		default:
+			return actionErrMsg{action: action, err: fmt.Errorf("unsupported action")}
 		}
-		return applyDoneMsg{targets: targets}
+
+		return actionDoneMsg{action: action}
 	}
 }
 
@@ -166,20 +285,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncDiffPreview(false)
 
 	case entriesLoadedMsg:
+		if msg.mode != m.listMode {
+			break
+		}
+
 		m.entryGeneration++
 		m.loadErr = nil
 		m.entries = m.hydrateEntries(msg.entries)
 		m.clampCursor()
 		m.reconcileSelections()
 		m.pruneCaches()
-		cmds = append(cmds, m.loadSourcePathsCmd())
-		cmds = append(cmds, m.queueInitialDiffLoadsCmd())
+		m.invalidateDiffs()
 		m.syncDiffPreview(true)
 
+		if m.listMode == listModeManaged {
+			cmds = append(cmds, m.loadSourcePathsCmd())
+			if m.applySourceMode.RequiresSnapshot() {
+				if m.snapshotSource == "" && !m.snapshotLoading {
+					cmds = append(cmds, m.startSnapshotPreparation())
+				} else if m.snapshotSource != "" {
+					cmds = append(cmds, m.queueInitialDiffLoadsCmd())
+				}
+			} else {
+				cmds = append(cmds, m.queueInitialDiffLoadsCmd())
+			}
+		} else {
+			cmds = append(cmds, m.queueInitialDiffLoadsCmd())
+		}
+
 	case entriesErrMsg:
+		if msg.mode != m.listMode {
+			break
+		}
 		m.loadErr = msg.err
 		m.entries = nil
-		m.confirmTargets = nil
+		m.confirmAction = pendingAction{}
+		m.invalidateDiffs()
 		m.syncDiffPreview(true)
 
 	case sourcePathMsg:
@@ -192,6 +333,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if index := m.entryIndex(msg.targetPath); index >= 0 {
 			m.entries[index].SourcePath = msg.path
 		}
+
+	case snapshotReadyMsg:
+		if msg.mode != m.applySourceMode || msg.requestID != m.snapshotRequestID {
+			if msg.rootDir != "" {
+				_ = os.RemoveAll(msg.rootDir)
+			}
+			break
+		}
+		if m.snapshotRoot != "" && m.snapshotRoot != msg.rootDir {
+			_ = os.RemoveAll(m.snapshotRoot)
+		}
+		m.snapshotLoading = false
+		m.snapshotErr = nil
+		m.snapshotRoot = msg.rootDir
+		m.snapshotSource = msg.sourceDir
+		m.sourceRoot = msg.sourceRoot
+		cmds = append(cmds, m.queueInitialDiffLoadsCmd())
+
+	case snapshotErrMsg:
+		if msg.mode != m.applySourceMode || msg.requestID != m.snapshotRequestID {
+			break
+		}
+		m.snapshotLoading = false
+		m.snapshotErr = msg.err
+		m.statusMsg = fmt.Sprintf("Failed to prepare %s snapshot: %v", msg.mode, msg.err)
+		m.syncDiffPreview(true)
 
 	case diffLoadedMsg:
 		if !m.acceptDiffResult(msg.targetPath, msg.generation, msg.requestID) {
@@ -222,33 +389,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncDiffPreview(false)
 		}
 
-	case applyDoneMsg:
+	case actionDoneMsg:
 		m.state = stateNormal
-		m.confirmTargets = nil
-		m.clearTargetSelections(msg.targets...)
-		m.statusMsg = fmt.Sprintf("Applied %d file(s)", len(msg.targets))
+		if msg.action.kind == actionApply {
+			m.clearTargetSelections(msg.action.targets...)
+		}
+		m.confirmAction = pendingAction{}
+		if m.applySourceMode.RequiresSnapshot() {
+			m.invalidateSnapshot()
+		}
+		m.statusMsg = actionSuccessMessage(msg.action, m.applySourceMode)
 		cmds = append(cmds, m.loadEntriesCmd())
 
-	case applyErrMsg:
+	case actionErrMsg:
 		m.state = stateNormal
-		m.confirmTargets = nil
-		switch {
-		case msg.appliedCount > 0:
-			m.statusMsg = fmt.Sprintf(
-				"Applied %d file(s) before failing on %s: %v",
-				msg.appliedCount,
-				msg.failedTarget,
-				msg.err,
-			)
-		case msg.failedTarget != "":
-			m.statusMsg = fmt.Sprintf("Failed to apply %s: %v", msg.failedTarget, msg.err)
-		default:
-			m.statusMsg = fmt.Sprintf("Error applying: %v", msg.err)
+		m.confirmAction = pendingAction{}
+		if m.applySourceMode.RequiresSnapshot() {
+			m.invalidateSnapshot()
 		}
+		m.statusMsg = actionFailureMessage(msg, m.applySourceMode)
 		cmds = append(cmds, m.loadEntriesCmd())
 
 	case editorErrMsg:
 		m.statusMsg = fmt.Sprintf("Editor error: %v", msg.err)
+
+	case tea.MouseMsg:
+		switch m.state {
+		case stateNormal:
+			if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+				cmds = append(cmds, m.handleMouseClick(msg))
+				break
+			}
+			if m.focusedPane == paneDiff {
+				var cmd tea.Cmd
+				m.diffViewport, cmd = m.diffViewport.Update(msg)
+				cmds = append(cmds, cmd)
+			}
+		case stateConfirming, stateCommandInput, stateHelp, stateRunningAction:
+			// Ignore mouse input outside the main browsing state.
+		}
 
 	case tea.KeyMsg:
 		switch m.state {
@@ -257,24 +436,68 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateNormal
 			}
 
+		case stateCommandInput:
+			switch msg.String() {
+			case "esc":
+				m.state = stateNormal
+				m.resetCommandInput()
+				m.statusMsg = "Cancelled"
+			case "enter":
+				command := strings.TrimSpace(m.commandInput)
+				if command == "" {
+					m.state = stateNormal
+					m.statusMsg = "Cancelled"
+					break
+				}
+				entry := m.selectedEntry()
+				if entry == nil {
+					m.state = stateNormal
+					m.statusMsg = "No entry selected"
+					break
+				}
+				m.confirmAction = pendingAction{
+					kind:    actionShell,
+					entry:   *entry,
+					command: command,
+				}
+				m.state = stateConfirming
+				m.statusMsg = ""
+			case "backspace", "ctrl+h":
+				if len(m.commandInput) > 0 {
+					m.commandInput = m.commandInput[:len(m.commandInput)-1]
+				}
+			default:
+				if msg.Type == tea.KeyRunes {
+					m.commandInput += string(msg.Runes)
+				}
+			}
+
 		case stateConfirming:
 			switch msg.String() {
 			case "y", "Y":
-				if len(m.confirmTargets) == 0 {
+				if !m.confirmAction.valid() {
 					m.state = stateNormal
 					break
 				}
-				m.state = stateApplying
-				m.statusMsg = fmt.Sprintf("Applying %d file(s)...", len(m.confirmTargets))
-				cmds = append(cmds, m.applyTargetsCmd(m.confirmTargets))
+				if m.confirmAction.kind == actionApply {
+					if err := m.diffSourceUnavailable(); err != nil {
+						m.state = stateNormal
+						m.confirmAction = pendingAction{}
+						m.statusMsg = err.Error()
+						break
+					}
+				}
+				m.state = stateRunningAction
+				m.statusMsg = runningActionMessage(m.confirmAction, m.applySourceMode)
+				cmds = append(cmds, m.runActionCmd(m.confirmAction))
 			case "n", "N", "esc":
 				m.state = stateNormal
-				m.confirmTargets = nil
+				m.confirmAction = pendingAction{}
 				m.statusMsg = "Cancelled"
 			}
 
-		case stateApplying:
-			// Ignore keys while applying.
+		case stateRunningAction:
+			// Ignore keys while commands are running.
 
 		case stateNormal:
 			switch msg.String() {
@@ -286,13 +509,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "r":
 				m.statusMsg = "Refreshing..."
+				m.invalidateDiffs()
+				if m.applySourceMode.RequiresSnapshot() {
+					m.invalidateSnapshot()
+				}
 				cmds = append(cmds, m.loadEntriesCmd())
 
+			case "m":
+				if m.listMode == listModeManaged {
+					m.listMode = listModeUnmanaged
+				} else {
+					m.listMode = listModeManaged
+				}
+				m.statusMsg = fmt.Sprintf("Switched to %s mode", m.listMode)
+				m.invalidateDiffs()
+				cmds = append(cmds, m.loadEntriesCmd())
+
+			case "1", "2", "3":
+				mode, ok := applySourceModeFromKey(msg.String())
+				if !ok || mode == m.applySourceMode {
+					break
+				}
+				m.applySourceMode = mode
+				m.statusMsg = fmt.Sprintf("Apply source set to %s", mode)
+				m.invalidateDiffs()
+				m.invalidateSnapshot()
+				if m.listMode == listModeManaged {
+					if mode.RequiresSnapshot() {
+						cmds = append(cmds, m.startSnapshotPreparation())
+					} else {
+						cmds = append(cmds, m.queueInitialDiffLoadsCmd())
+					}
+				}
+
 			case "tab":
-				m.focusedPane = nextPane(m.focusedPane)
+				m.toggleDiffPaneFocus()
 
 			case "shift+tab":
-				m.focusedPane = prevPane(m.focusedPane)
+				m.toggleDiffPaneFocus()
+
+			case "h":
+				if m.focusedPane != paneDiff {
+					m.setFocusedPane(paneSrc)
+				}
+
+			case "l":
+				if m.focusedPane != paneDiff {
+					m.setFocusedPane(paneTarget)
+				}
 
 			case "j", "down":
 				if m.focusedPane == paneDiff {
@@ -319,7 +583,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case " ", "space":
-				if m.focusedPane != paneTarget {
+				if m.focusedPane != paneTarget || m.listMode != listModeManaged {
 					break
 				}
 				entry := m.selectedEntry()
@@ -334,15 +598,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "a":
-				if m.focusedPane != paneTarget {
+				if m.focusedPane != paneTarget || m.listMode != listModeManaged {
 					break
 				}
 				targets := m.currentApplyTargets()
 				if len(targets) == 0 {
 					break
 				}
-				m.confirmTargets = targets
+				if err := m.diffSourceUnavailable(); err != nil {
+					m.statusMsg = err.Error()
+					break
+				}
+				entry := m.selectedEntry()
+				if entry == nil {
+					break
+				}
+				m.confirmAction = pendingAction{
+					kind:    actionApply,
+					targets: targets,
+					entry:   *entry,
+				}
 				m.state = stateConfirming
+				m.statusMsg = ""
+
+			case "i":
+				if m.focusedPane != paneTarget || m.listMode != listModeUnmanaged {
+					break
+				}
+				entry := m.selectedEntry()
+				if entry == nil || !entry.CanAdd() {
+					break
+				}
+				m.confirmAction = pendingAction{kind: actionAdd, entry: *entry}
+				m.state = stateConfirming
+				m.statusMsg = ""
+
+			case "d":
+				if m.focusedPane != paneTarget || m.listMode != listModeUnmanaged {
+					break
+				}
+				entry := m.selectedEntry()
+				if entry == nil || !entry.CanDeleteTarget() {
+					break
+				}
+				m.confirmAction = pendingAction{kind: actionDelete, entry: *entry}
+				m.state = stateConfirming
+				m.statusMsg = ""
+
+			case "!":
+				entry := m.selectedEntry()
+				if entry == nil {
+					break
+				}
+				m.state = stateCommandInput
+				m.resetCommandInput()
 				m.statusMsg = ""
 
 			case "e":
@@ -352,12 +661,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				switch m.focusedPane {
 				case paneSrc:
-					if entry.SourcePath == "" {
+					switch {
+					case entry.Kind == model.EntryUnmanaged:
+						m.statusMsg = "Unmanaged entries do not have a source file yet"
+					case !entry.CanEditSource():
 						m.statusMsg = "Source path is still resolving"
+					default:
+						cmds = append(cmds, m.openEditor(entry.SourcePath))
+					}
+				case paneTarget:
+					if !entry.CanEditTarget() {
+						m.statusMsg = "Directories cannot be opened in $EDITOR"
 						break
 					}
-					cmds = append(cmds, m.openEditor(entry.SourcePath))
-				case paneTarget:
 					cmds = append(cmds, m.openEditor(entry.TargetPath))
 				case paneDiff:
 					m.statusMsg = "Move focus to src or target to edit a file"
@@ -391,6 +707,9 @@ func (m Model) hydrateEntries(entries []model.Entry) []model.Entry {
 	hydrated := make([]model.Entry, len(entries))
 	copy(hydrated, entries)
 	for i := range hydrated {
+		if hydrated[i].Kind != model.EntryManaged {
+			continue
+		}
 		if path, ok := m.sourcePathCache[hydrated[i].TargetPath]; ok {
 			hydrated[i].SourcePath = path
 		}
@@ -408,17 +727,12 @@ func (m *Model) pruneCaches() {
 			delete(m.sourcePathCache, targetPath)
 		}
 	}
-	for targetPath := range m.diffCache {
-		if _, ok := currentTargets[targetPath]; !ok {
-			delete(m.diffCache, targetPath)
-		}
-	}
 }
 
 func (m Model) loadSourcePathsCmd() tea.Cmd {
 	var cmds []tea.Cmd
 	for _, entry := range m.entries {
-		if entry.SourcePath != "" {
+		if entry.Kind != model.EntryManaged || entry.SourcePath != "" {
 			continue
 		}
 		cmds = append(cmds, m.loadSourcePathCmd(entry.TargetPath, m.entryGeneration))
@@ -426,9 +740,19 @@ func (m Model) loadSourcePathsCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+func (m *Model) startSnapshotPreparation() tea.Cmd {
+	m.snapshotLoading = true
+	m.snapshotErr = nil
+	m.snapshotRequestID++
+	return m.prepareSnapshotCmd(m.applySourceMode, m.snapshotRequestID)
+}
+
 func (m *Model) requestDiffLoadCmd(targetPath string) tea.Cmd {
 	entry := m.entryByTarget(targetPath)
 	if entry == nil {
+		return nil
+	}
+	if entry.Kind == model.EntryManaged && m.applySourceMode.RequiresSnapshot() && m.snapshotSource == "" {
 		return nil
 	}
 
@@ -442,7 +766,7 @@ func (m *Model) requestDiffLoadCmd(targetPath string) tea.Cmd {
 	}
 	m.diffCache[targetPath] = state
 
-	return m.loadDiffCmd(*entry, state.requestGeneration, state.requestID)
+	return m.loadDiffCmd(*entry, state.requestGeneration, state.requestID, m.applySourceMode, m.snapshotSource)
 }
 
 func (m *Model) refreshSelectedDiffCmd(resetScroll bool) tea.Cmd {
@@ -458,6 +782,11 @@ func (m *Model) refreshSelectedDiffCmd(resetScroll bool) tea.Cmd {
 		return nil
 	}
 
+	if entry.Kind == model.EntryManaged && m.applySourceMode.RequiresSnapshot() && m.snapshotSource == "" {
+		m.syncDiffPreview(resetScroll)
+		return nil
+	}
+
 	cmd := m.requestDiffLoadCmd(entry.TargetPath)
 	m.syncDiffPreview(resetScroll)
 	return cmd
@@ -466,6 +795,9 @@ func (m *Model) refreshSelectedDiffCmd(resetScroll bool) tea.Cmd {
 func (m *Model) queueInitialDiffLoadsCmd() tea.Cmd {
 	entry := m.selectedEntry()
 	if entry == nil {
+		return nil
+	}
+	if entry.Kind == model.EntryManaged && m.applySourceMode.RequiresSnapshot() && m.snapshotSource == "" {
 		return nil
 	}
 
@@ -512,26 +844,34 @@ func (m Model) acceptDiffResult(targetPath string, generation, requestID int) bo
 	return state.requestGeneration == generation && state.requestID == requestID
 }
 
-func nextPane(current paneKind) paneKind {
-	switch current {
-	case paneTarget:
-		return paneSrc
-	case paneSrc:
-		return paneDiff
-	default:
-		return paneTarget
+func (m *Model) handleMouseClick(msg tea.MouseMsg) tea.Cmd {
+	if !m.ready {
+		return nil
 	}
+
+	layout := m.layout()
+	switch {
+	case layout.diff.contains(msg.X, msg.Y):
+		m.setFocusedPane(paneDiff)
+	case layout.src.contains(msg.X, msg.Y):
+		m.setFocusedPane(paneSrc)
+		return m.selectListRow(layout.rect(paneSrc), paneSrc, msg.X, msg.Y)
+	case layout.target.contains(msg.X, msg.Y):
+		m.setFocusedPane(paneTarget)
+		return m.selectListRow(layout.rect(paneTarget), paneTarget, msg.X, msg.Y)
+	}
+
+	return nil
 }
 
-func prevPane(current paneKind) paneKind {
-	switch current {
-	case paneTarget:
-		return paneDiff
-	case paneSrc:
-		return paneTarget
-	default:
-		return paneSrc
+func (m *Model) selectListRow(rect paneRect, kind paneKind, x, y int) tea.Cmd {
+	row, ok := m.listPaneMetrics(kind, rect).rowIndex(x, y, len(m.entries))
+	if !ok || row == m.cursor {
+		return nil
 	}
+
+	m.cursor = row
+	return m.refreshSelectedDiffCmd(true)
 }
 
 func openEditorCmd(path string) tea.Cmd {
@@ -546,6 +886,136 @@ func openEditorCmd(path string) tea.Cmd {
 		}
 		return nil
 	})
+}
+
+func runShellCommandCmd(command string, env []string, action pendingAction) tea.Cmd {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "sh"
+	}
+
+	cmd := exec.Command(shell, "-lc", command)
+	cmd.Env = append(os.Environ(), env...)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			return actionErrMsg{action: action, err: fmt.Errorf("shell command: %w", err)}
+		}
+		return actionDoneMsg{action: action}
+	})
+}
+
+func buildUnmanagedDiff(entry model.Entry) (string, error) {
+	content, label, err := unmanagedPreview(entry)
+	if err != nil {
+		return "", err
+	}
+	return diff.Compute("source (missing)", nil, label, content), nil
+}
+
+func unmanagedPreview(entry model.Entry) ([]byte, string, error) {
+	switch entry.TargetType {
+	case model.TargetDirectory:
+		entries, err := os.ReadDir(entry.TargetPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("read directory: %w", err)
+		}
+		var lines []string
+		for _, current := range entries {
+			name := current.Name()
+			if current.IsDir() {
+				name += "/"
+			}
+			lines = append(lines, name)
+		}
+		if len(lines) == 0 {
+			lines = append(lines, "(empty directory)")
+		}
+		return []byte(strings.Join(lines, "\n") + "\n"), entry.TargetPath + " (directory)", nil
+	case model.TargetSymlink:
+		target, err := os.Readlink(entry.TargetPath)
+		if err != nil {
+			return nil, "", fmt.Errorf("read symlink: %w", err)
+		}
+		return []byte("symlink -> " + target + "\n"), entry.TargetPath + " (symlink)", nil
+	default:
+		content, err := os.ReadFile(entry.TargetPath)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, "", fmt.Errorf("read target: %w", err)
+		}
+		return content, entry.TargetPath, nil
+	}
+}
+
+func removeTargetPath(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+		return os.RemoveAll(path)
+	}
+	return os.Remove(path)
+}
+
+func runningActionMessage(action pendingAction, mode gitmode.SourceMode) string {
+	switch action.kind {
+	case actionApply:
+		return fmt.Sprintf("Applying %d file(s) from %s...", len(action.targets), mode)
+	case actionAdd:
+		return fmt.Sprintf("Adding %s to source state...", action.entry.TargetPath)
+	case actionDelete:
+		return fmt.Sprintf("Deleting %s...", action.entry.TargetPath)
+	case actionShell:
+		return fmt.Sprintf("Running shell command for %s...", action.entry.TargetPath)
+	default:
+		return "Running..."
+	}
+}
+
+func actionSuccessMessage(action pendingAction, mode gitmode.SourceMode) string {
+	switch action.kind {
+	case actionApply:
+		return fmt.Sprintf("Applied %d file(s) from %s", len(action.targets), mode)
+	case actionAdd:
+		return fmt.Sprintf("Added %s to source state", action.entry.TargetPath)
+	case actionDelete:
+		return fmt.Sprintf("Deleted %s", action.entry.TargetPath)
+	case actionShell:
+		return fmt.Sprintf("Command finished: %s", action.command)
+	default:
+		return "Done"
+	}
+}
+
+func actionFailureMessage(msg actionErrMsg, mode gitmode.SourceMode) string {
+	switch msg.action.kind {
+	case actionApply:
+		switch {
+		case msg.completed > 0:
+			return fmt.Sprintf(
+				"Applied %d file(s) from %s before failing on %s: %v",
+				msg.completed,
+				mode,
+				msg.failedTarget,
+				msg.err,
+			)
+		case msg.failedTarget != "":
+			return fmt.Sprintf("Failed to apply %s from %s: %v", msg.failedTarget, mode, msg.err)
+		default:
+			return fmt.Sprintf("Failed to apply from %s: %v", mode, msg.err)
+		}
+	case actionAdd:
+		return fmt.Sprintf("Failed to add %s: %v", msg.failedTarget, msg.err)
+	case actionDelete:
+		return fmt.Sprintf("Failed to delete %s: %v", msg.failedTarget, msg.err)
+	case actionShell:
+		return fmt.Sprintf("Shell command failed: %v", msg.err)
+	default:
+		return fmt.Sprintf("Command failed: %v", msg.err)
+	}
 }
 
 func colorizeDiff(content string) string {

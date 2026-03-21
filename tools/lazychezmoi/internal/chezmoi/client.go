@@ -46,6 +46,27 @@ func (c *Client) Status() ([]model.Entry, error) {
 	return ParseStatus(out), nil
 }
 
+func (c *Client) Unmanaged() ([]model.Entry, error) {
+	args := []string{"unmanaged", "--path-style", "absolute", "--nul-path-separator"}
+	if len(c.Exclude) > 0 {
+		args = append(args, "--exclude", strings.Join(c.Exclude, ","))
+	}
+	c.appendSourceDest(&args)
+	out, err := c.run(args...)
+	if err != nil {
+		return nil, fmt.Errorf("chezmoi unmanaged: %w", err)
+	}
+	return ParseUnmanaged(out), nil
+}
+
+func (c *Client) SourceDir() (string, error) {
+	out, err := c.run("source-path")
+	if err != nil {
+		return "", fmt.Errorf("chezmoi source-path: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func (c *Client) SourcePath(targetPath string) (string, error) {
 	args := []string{"source-path", targetPath}
 	if c.Source != "" {
@@ -76,6 +97,22 @@ func (c *Client) Apply(targetPath string) error {
 		return fmt.Errorf("chezmoi apply: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) Add(targetPath string) error {
+	args := []string{"add", targetPath}
+	c.appendSourceDest(&args)
+	_, err := c.run(args...)
+	if err != nil {
+		return fmt.Errorf("chezmoi add: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) WithSource(source string) *Client {
+	clone := *c
+	clone.Source = source
+	return &clone
 }
 
 func (c *Client) appendSourceDest(args *[]string) {
