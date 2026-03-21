@@ -30,9 +30,15 @@ gitui-style review-and-apply workflow for your dotfiles.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := chezmoi.New(chezmoiBin, source, destination, exclude)
 			m := ui.New(client)
-			p := tea.NewProgram(m, tea.WithAltScreen())
-			if _, err := p.Run(); err != nil {
+			p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+			finalModel, err := p.Run()
+			if err != nil {
 				return fmt.Errorf("TUI error: %w", err)
+			}
+			if model, ok := finalModel.(ui.Model); ok {
+				if err := model.Cleanup(); err != nil {
+					return fmt.Errorf("cleanup error: %w", err)
+				}
 			}
 			return nil
 		},
