@@ -8,7 +8,8 @@ A terminal UI for [chezmoi](https://www.chezmoi.io/) inspired by lazygit/gitui.
 - Toggle between managed changes and unmanaged target-only entries
 - Preview diffs inline with background caching and refresh
 - Apply one or many target files from `working tree`, `staged`, or `HEAD`
-- Add unmanaged targets into chezmoi source state and delete them from the target tree
+- Run `chezmoi add` for unmanaged targets or import target-side changes from managed targets back into source state
+- Delete unmanaged targets from the target tree
 - Run a custom shell command with the selected entry exported as `LAZYCHEZMOI_*` environment variables
 - Open the focused source or target file in your `$EDITOR`
 - Refresh the file list at any time
@@ -36,6 +37,11 @@ lazychezmoi [flags]
 | `--exclude` | | Comma-separated types to exclude (e.g. `templates,scripts`) |
 | `--chezmoi-bin` | `chezmoi` | Path to chezmoi binary |
 
+### Modes
+
+- `managed`: files already tracked by chezmoi where the target tree currently differs from source state
+- `unmanaged`: target-only paths that are not yet tracked in chezmoi source state
+
 ### Keybindings
 
 | Key | Action |
@@ -48,7 +54,7 @@ lazychezmoi [flags]
 | `1` / `2` / `3` | Select apply source: `working tree` / `staged` / `HEAD` |
 | `space` | Toggle the current target in the apply queue (`managed` mode) |
 | `a` | Apply queued targets, or the current target if nothing is queued (`managed` mode) |
-| `i` | Add the current unmanaged target to chezmoi source state (`unmanaged` mode) |
+| `i` | Run `chezmoi add` for the selected target: update source from target (`managed`) or start tracking the target (`unmanaged`) |
 | `d` | Delete the current unmanaged target after confirmation (`unmanaged` mode) |
 | `!` | Enter a custom shell command for the selected entry |
 | `e` | Open the focused `src` or `target` file in `$EDITOR` |

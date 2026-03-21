@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"lazychezmoi/internal/diff"
 	gitmode "lazychezmoi/internal/git"
@@ -266,8 +267,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		headerH := 2
-		footerH := 3
+		headerH := lipgloss.Height(m.renderHeader())
+		footerH := lipgloss.Height(m.renderFooter())
 		contentH := m.height - headerH - footerH
 		if contentH < 2 {
 			contentH = 2
@@ -398,12 +399,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.applySourceMode.RequiresSnapshot() {
 			m.invalidateSnapshot()
 		}
+		m.applySuccessfulAction(msg.action)
 		m.statusMsg = actionSuccessMessage(msg.action, m.applySourceMode)
 		cmds = append(cmds, m.loadEntriesCmd())
 
 	case actionErrMsg:
 		m.state = stateNormal
 		m.confirmAction = pendingAction{}
+		if msg.action.kind == actionApply && msg.completed > 0 {
+			m.applySuccessfulAction(pendingAction{
+				kind:    actionApply,
+				targets: append([]string(nil), msg.action.targets[:msg.completed]...),
+			})
+		}
 		if m.applySourceMode.RequiresSnapshot() {
 			m.invalidateSnapshot()
 		}
@@ -622,7 +630,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMsg = ""
 
 			case "i":
-				if m.focusedPane != paneTarget || m.listMode != listModeUnmanaged {
+				if m.focusedPane != paneTarget {
 					break
 				}
 				entry := m.selectedEntry()
@@ -725,6 +733,11 @@ func (m *Model) pruneCaches() {
 	for targetPath := range m.sourcePathCache {
 		if _, ok := currentTargets[targetPath]; !ok {
 			delete(m.sourcePathCache, targetPath)
+		}
+	}
+	for targetPath := range m.diffCache {
+		if _, ok := currentTargets[targetPath]; !ok {
+			delete(m.diffCache, targetPath)
 		}
 	}
 }
@@ -965,6 +978,9 @@ func runningActionMessage(action pendingAction, mode gitmode.SourceMode) string 
 	case actionApply:
 		return fmt.Sprintf("Applying %d file(s) from %s...", len(action.targets), mode)
 	case actionAdd:
+		if action.entry.Kind == model.EntryManaged {
+			return fmt.Sprintf("Updating source state from %s...", action.entry.TargetPath)
+		}
 		return fmt.Sprintf("Adding %s to source state...", action.entry.TargetPath)
 	case actionDelete:
 		return fmt.Sprintf("Deleting %s...", action.entry.TargetPath)
@@ -980,6 +996,9 @@ func actionSuccessMessage(action pendingAction, mode gitmode.SourceMode) string 
 	case actionApply:
 		return fmt.Sprintf("Applied %d file(s) from %s", len(action.targets), mode)
 	case actionAdd:
+		if action.entry.Kind == model.EntryManaged {
+			return fmt.Sprintf("Updated source state from %s", action.entry.TargetPath)
+		}
 		return fmt.Sprintf("Added %s to source state", action.entry.TargetPath)
 	case actionDelete:
 		return fmt.Sprintf("Deleted %s", action.entry.TargetPath)
@@ -1008,6 +1027,9 @@ func actionFailureMessage(msg actionErrMsg, mode gitmode.SourceMode) string {
 			return fmt.Sprintf("Failed to apply from %s: %v", mode, msg.err)
 		}
 	case actionAdd:
+		if msg.action.entry.Kind == model.EntryManaged {
+			return fmt.Sprintf("Failed to update source state from %s: %v", msg.failedTarget, msg.err)
+		}
 		return fmt.Sprintf("Failed to add %s: %v", msg.failedTarget, msg.err)
 	case actionDelete:
 		return fmt.Sprintf("Failed to delete %s: %v", msg.failedTarget, msg.err)

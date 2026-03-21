@@ -58,15 +58,19 @@ type Entry struct {
 	SourcePath string // resolved lazily
 }
 
+func (e Entry) HasTargetDiff() bool {
+	return e.Kind == EntryManaged && e.TargetCode != StatusNone && e.TargetCode != StatusDeleted
+}
+
 func (e Entry) CanApply() bool {
-	if e.Kind != EntryManaged {
-		return false
-	}
-	return e.TargetCode != StatusNone && e.TargetCode != StatusDeleted
+	return e.HasTargetDiff()
 }
 
 func (e Entry) CanAdd() bool {
-	return e.Kind == EntryUnmanaged
+	if e.Kind == EntryUnmanaged {
+		return true
+	}
+	return e.HasTargetDiff()
 }
 
 func (e Entry) CanDeleteTarget() bool {
