@@ -60,7 +60,13 @@ type snapshotErrMsg struct {
 }
 
 type actionDoneMsg struct {
-	action pendingAction
+	action       pendingAction
+	hasConflicts bool
+}
+
+type patchConflictMsg struct {
+	entry   model.Entry
+	applied []byte
 }
 
 type actionErrMsg struct {
@@ -247,6 +253,53 @@ func (m Model) runActionCmd(action pendingAction) tea.Cmd {
 			if err := removeTargetPath(action.entry.TargetPath); err != nil {
 				return actionErrMsg{action: action, failedTarget: action.entry.TargetPath, err: err}
 			}
+		case actionPatchSource:
+			sourcePath := action.entry.SourcePath
+			targetPath := action.entry.TargetPath
+
+			dst, err := os.ReadFile(targetPath)
+			if err != nil {
+				return actionErrMsg{action: action, failedTarget: sourcePath, err: fmt.Errorf("read target: %w", err)}
+			}
+			rendered, err := client.Cat(targetPath)
+			if err != nil {
+				return actionErrMsg{action: action, failedTarget: sourcePath, err: fmt.Errorf("chezmoi cat: %w", err)}
+			}
+			srcContent, err := os.ReadFile(sourcePath)
+			if err != nil {
+				return actionErrMsg{action: action, failedTarget: sourcePath, err: fmt.Errorf("read source: %w", err)}
+			}
+
+			patchContent := diff.Compute("rendered", rendered, "target", dst)
+			applied, hasConflicts := diff.ApplyWithConflicts(srcContent, patchContent)
+
+			if hasConflicts {
+				// Return for secondary confirmation before writing.
+				return patchConflictMsg{entry: action.entry, applied: applied}
+			}
+
+			info, err := os.Stat(sourcePath)
+			perm := os.FileMode(0644)
+			if err == nil {
+				perm = info.Mode()
+			}
+			if err := os.WriteFile(sourcePath, applied, perm); err != nil {
+				return actionErrMsg{action: action, failedTarget: sourcePath, err: fmt.Errorf("write source: %w", err)}
+			}
+			return actionDoneMsg{action: action}
+
+		case actionPatchSourceConfirm:
+			sourcePath := action.entry.SourcePath
+			info, err := os.Stat(sourcePath)
+			perm := os.FileMode(0644)
+			if err == nil {
+				perm = info.Mode()
+			}
+			if err := os.WriteFile(sourcePath, action.patchResult, perm); err != nil {
+				return actionErrMsg{action: action, failedTarget: sourcePath, err: fmt.Errorf("write source: %w", err)}
+			}
+			return actionDoneMsg{action: action, hasConflicts: true}
+
 		default:
 			return actionErrMsg{action: action, err: fmt.Errorf("unsupported action")}
 		}
@@ -390,6 +443,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncDiffPreview(false)
 		}
 
+	case patchConflictMsg:
+		m.state = stateConfirming
+		m.confirmAction = pendingAction{
+			kind:        actionPatchSourceConfirm,
+			entry:       msg.entry,
+			patchResult: msg.applied,
+		}
+		m.statusMsg = fmt.Sprintf("Conflicts found in %s. Apply with conflict markers?", msg.entry.SourcePath)
+
 	case actionDoneMsg:
 		m.state = stateNormal
 		if msg.action.kind == actionApply {
@@ -400,7 +462,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.invalidateSnapshot()
 		}
 		m.applySuccessfulAction(msg.action)
-		m.statusMsg = actionSuccessMessage(msg.action, m.applySourceMode)
+		if msg.hasConflicts {
+			m.statusMsg = fmt.Sprintf("Patched %s with conflicts - resolve manually ('e' to edit)", msg.action.entry.SourcePath)
+		} else {
+			m.statusMsg = actionSuccessMessage(msg.action, m.applySourceMode)
+		}
 		cmds = append(cmds, m.loadEntriesCmd())
 
 	case actionErrMsg:
@@ -637,7 +703,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if entry == nil || !entry.CanAdd() {
 					break
 				}
-				m.confirmAction = pendingAction{kind: actionAdd, entry: *entry}
+				if entry.IsTemplate() {
+					m.confirmAction = pendingAction{kind: actionPatchSource, entry: *entry}
+				} else {
+					m.confirmAction = pendingAction{kind: actionAdd, entry: *entry}
+				}
 				m.state = stateConfirming
 				m.statusMsg = ""
 
@@ -986,6 +1056,10 @@ func runningActionMessage(action pendingAction, mode gitmode.SourceMode) string 
 		return fmt.Sprintf("Deleting %s...", action.entry.TargetPath)
 	case actionShell:
 		return fmt.Sprintf("Running shell command for %s...", action.entry.TargetPath)
+	case actionPatchSource:
+		return fmt.Sprintf("Patching template source %s...", action.entry.SourcePath)
+	case actionPatchSourceConfirm:
+		return fmt.Sprintf("Writing conflict markers to %s...", action.entry.SourcePath)
 	default:
 		return "Running..."
 	}
@@ -1004,6 +1078,10 @@ func actionSuccessMessage(action pendingAction, mode gitmode.SourceMode) string 
 		return fmt.Sprintf("Deleted %s", action.entry.TargetPath)
 	case actionShell:
 		return fmt.Sprintf("Command finished: %s", action.command)
+	case actionPatchSource:
+		return fmt.Sprintf("Patched template source %s", action.entry.SourcePath)
+	case actionPatchSourceConfirm:
+		return fmt.Sprintf("Patched template source %s", action.entry.SourcePath)
 	default:
 		return "Done"
 	}
@@ -1035,6 +1113,8 @@ func actionFailureMessage(msg actionErrMsg, mode gitmode.SourceMode) string {
 		return fmt.Sprintf("Failed to delete %s: %v", msg.failedTarget, msg.err)
 	case actionShell:
 		return fmt.Sprintf("Shell command failed: %v", msg.err)
+	case actionPatchSource, actionPatchSourceConfirm:
+		return fmt.Sprintf("Failed to patch template source %s: %v", msg.failedTarget, msg.err)
 	default:
 		return fmt.Sprintf("Command failed: %v", msg.err)
 	}
