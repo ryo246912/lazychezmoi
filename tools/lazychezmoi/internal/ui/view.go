@@ -59,7 +59,7 @@ func (m Model) renderMain(contentH int) string {
 func (m Model) renderHeader() string {
 	left := " lazychezmoi"
 
-	parts := []string{m.listMode.String()}
+	parts := []string{m.listMode.HeaderLabel()}
 	if m.listMode == listModeManaged {
 		parts = append(parts, fmt.Sprintf("apply source: %s", m.applySourceMode))
 	}
@@ -91,6 +91,7 @@ func (m Model) renderFooter() string {
 			lines = append(lines, m.statusMsg)
 		}
 		lines = append(lines, m.renderKeyHints())
+		lines = append(lines, m.renderModeHint())
 	}
 
 	return footerStyle.Width(m.width).Render(strings.Join(lines, "\n"))
@@ -110,16 +111,26 @@ func (m Model) renderKeyHints() string {
 		return " j/k/pgup/pgdn/g/G:scroll diff  tab:return to list  !:command  m:mode  r:refresh  ?:help  q:quit"
 	default:
 		if m.listMode == listModeManaged {
-			return " j/k:move  h/l:focus src/target  tab:focus diff  space:queue  a:apply  e:edit target  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
+			return " j/k:move  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src  e:edit target  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 		}
 		return " j/k:move  h/l:focus src/target  tab:focus diff  i:add  d:delete  e:edit target  !:command  m:mode  r:refresh  ?:help  q:quit"
 	}
+}
+
+func (m Model) renderModeHint() string {
+	hint := " mode: managed = tracked entries with target-side diff; target pane i copies the current target into source state"
+	if m.listMode == listModeUnmanaged {
+		hint = " mode: unmanaged = target-only paths not yet tracked by chezmoi; target pane i runs chezmoi add"
+	}
+	return truncateText(hint, max(1, m.width-2))
 }
 
 func (m Model) renderHelp() string {
 	help := `lazychezmoi - chezmoi TUI
 
 Modes:
+  managed       Entries already tracked by chezmoi with target-side diffs
+  unmanaged     Target-only paths that are not yet tracked by chezmoi
   m             Toggle managed / unmanaged list mode
   1 / 2 / 3     Select apply source: working tree / staged / HEAD
   !             Enter a custom shell command for the selected entry
@@ -131,7 +142,8 @@ Keybindings:
   tab           Toggle diff focus
   space         Toggle current target in the apply queue (managed mode)
   a             Apply queued targets (or the current target) from the selected source mode
-  i             Add the current unmanaged target to chezmoi source state
+  i             In target pane, run chezmoi add to update source from target (managed)
+                or start tracking the selected target path (unmanaged)
   d             Delete the current unmanaged target after confirmation
   e             Open the focused src/target file in $EDITOR
   click         Focus the clicked pane; src/target row clicks also select it
@@ -370,12 +382,22 @@ func (m Model) renderConfirmModal() string {
 			lines = append(lines, truncatePath(targetPath, 64))
 		}
 	case actionAdd:
-		title = "Add Target To Source?"
-		lines = append(lines,
-			"This will run `chezmoi add` for:",
-			"",
-			truncatePath(m.confirmAction.entry.TargetPath, 64),
-		)
+		if m.confirmAction.entry.Kind == model.EntryManaged {
+			title = "Copy Current Target Into Source?"
+			lines = append(lines,
+				"This will run `chezmoi add` and copy the current target-side",
+				"content back into chezmoi source state for:",
+				"",
+				truncatePath(m.confirmAction.entry.TargetPath, 64),
+			)
+		} else {
+			title = "Track Target In Source?"
+			lines = append(lines,
+				"This will run `chezmoi add` and start tracking:",
+				"",
+				truncatePath(m.confirmAction.entry.TargetPath, 64),
+			)
+		}
 	case actionDelete:
 		title = "Delete Target?"
 		lines = append(lines,
@@ -435,4 +457,11 @@ func truncatePath(path string, maxWidth int) string {
 		return path
 	}
 	return "..." + path[len(path)-(maxWidth-3):]
+}
+
+func truncateText(text string, maxWidth int) string {
+	if maxWidth <= 3 || len(text) <= maxWidth {
+		return text
+	}
+	return text[:maxWidth-3] + "..."
 }
