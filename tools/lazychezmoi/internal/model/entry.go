@@ -1,6 +1,9 @@
 package model
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strings"
+)
 
 type StatusCode byte
 
@@ -64,6 +67,12 @@ func (e Entry) HasTargetDiff() bool {
 
 func (e Entry) CanApply() bool {
 	return e.HasTargetDiff()
+}
+
+// IsTemplate returns true when the source file is a chezmoi template (.tmpl).
+// SourcePath must already be resolved for this to return true.
+func (e Entry) IsTemplate() bool {
+	return e.Kind == EntryManaged && strings.HasSuffix(e.SourcePath, ".tmpl")
 }
 
 func (e Entry) CanAdd() bool {

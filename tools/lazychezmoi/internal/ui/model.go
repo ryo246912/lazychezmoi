@@ -64,6 +64,8 @@ const (
 	actionAdd
 	actionDelete
 	actionShell
+	actionPatchSource
+	actionPatchSourceConfirm // write pre-computed patch result that contains conflict markers
 )
 
 func (k pendingActionKind) String() string {
@@ -76,16 +78,21 @@ func (k pendingActionKind) String() string {
 		return "delete"
 	case actionShell:
 		return "shell"
+	case actionPatchSource:
+		return "patch-source"
+	case actionPatchSourceConfirm:
+		return "patch-source-with-conflicts"
 	default:
 		return ""
 	}
 }
 
 type pendingAction struct {
-	kind    pendingActionKind
-	targets []string
-	entry   model.Entry
-	command string
+	kind        pendingActionKind
+	targets     []string
+	entry       model.Entry
+	command     string
+	patchResult []byte // pre-computed result for actionPatchSourceConfirm
 }
 
 func (a pendingAction) valid() bool {
@@ -447,7 +454,7 @@ func (m *Model) applySuccessfulAction(action pendingAction) {
 	switch action.kind {
 	case actionApply:
 		m.removeTargets(action.targets...)
-	case actionAdd, actionDelete:
+	case actionAdd, actionDelete, actionPatchSource, actionPatchSourceConfirm:
 		m.removeTargets(action.entry.TargetPath)
 	}
 }
