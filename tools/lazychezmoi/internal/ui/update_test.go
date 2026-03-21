@@ -7,13 +7,16 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	gitmode "lazychezmoi/internal/git"
 	"lazychezmoi/internal/model"
 )
 
 func TestEditUsesFocusedPanePath(t *testing.T) {
 	entry := model.Entry{
+		Kind:       model.EntryManaged,
 		SourceCode: model.StatusModified,
 		TargetCode: model.StatusModified,
+		TargetType: model.TargetFile,
 		SourcePath: "/src/dot_zshrc",
 		TargetPath: "/dst/.zshrc",
 	}
@@ -21,40 +24,66 @@ func TestEditUsesFocusedPanePath(t *testing.T) {
 	testCases := []struct {
 		name       string
 		focus      paneKind
-		sourcePath string
+		entry      model.Entry
 		wantPath   string
 		wantStatus string
 	}{
 		{
-			name:       "src pane opens source",
-			focus:      paneSrc,
-			sourcePath: "/src/dot_zshrc",
-			wantPath:   "/src/dot_zshrc",
+			name:     "src pane opens source",
+			focus:    paneSrc,
+			entry:    entry,
+			wantPath: "/src/dot_zshrc",
 		},
 		{
-			name:       "target pane opens target",
-			focus:      paneTarget,
-			sourcePath: "/src/dot_zshrc",
-			wantPath:   "/dst/.zshrc",
+			name:     "target pane opens target",
+			focus:    paneTarget,
+			entry:    entry,
+			wantPath: "/dst/.zshrc",
 		},
 		{
-			name:       "src pane waits for source resolution",
-			focus:      paneSrc,
-			sourcePath: "",
+			name:  "src pane waits for source resolution",
+			focus: paneSrc,
+			entry: model.Entry{
+				Kind:       model.EntryManaged,
+				SourceCode: model.StatusModified,
+				TargetCode: model.StatusModified,
+				TargetType: model.TargetFile,
+				TargetPath: "/dst/.zshrc",
+			},
 			wantStatus: "Source path is still resolving",
+		},
+		{
+			name:  "unmanaged src pane has no source file",
+			focus: paneSrc,
+			entry: model.Entry{
+				Kind:       model.EntryUnmanaged,
+				TargetType: model.TargetFile,
+				TargetPath: "/dst/.zshrc",
+			},
+			wantStatus: "Unmanaged entries do not have a source file yet",
+		},
+		{
+			name:  "directory target cannot be edited",
+			focus: paneTarget,
+			entry: model.Entry{
+				Kind:       model.EntryUnmanaged,
+				TargetType: model.TargetDirectory,
+				TargetPath: "/dst/.config",
+			},
+			wantStatus: "Directories cannot be opened in $EDITOR",
 		},
 		{
 			name:       "diff pane does not open an editor",
 			focus:      paneDiff,
+			entry:      entry,
 			wantStatus: "Move focus to src or target to edit a file",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := newTestModel([]model.Entry{entry})
+			m := newTestModel([]model.Entry{tc.entry})
 			m.focusedPane = tc.focus
-			m.entries[0].SourcePath = tc.sourcePath
 
 			var opened []string
 			m.openEditor = func(path string) tea.Cmd {
@@ -87,8 +116,8 @@ func TestEditUsesFocusedPanePath(t *testing.T) {
 
 func TestTargetSelectionAndBatchApplyConfirmation(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetPath: "/dst/.zshrc"},
-		{SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetPath: "/dst/.gitconfig"},
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
 	})
 
 	next, _ := m.Update(keySpace())
@@ -109,8 +138,8 @@ func TestTargetSelectionAndBatchApplyConfirmation(t *testing.T) {
 	}
 
 	wantTargets := []string{"/dst/.zshrc", "/dst/.gitconfig"}
-	if strings.Join(m.confirmTargets, ",") != strings.Join(wantTargets, ",") {
-		t.Fatalf("confirm targets = %v, want %v", m.confirmTargets, wantTargets)
+	if strings.Join(m.confirmAction.targets, ",") != strings.Join(wantTargets, ",") {
+		t.Fatalf("confirm targets = %v, want %v", m.confirmAction.targets, wantTargets)
 	}
 
 	view := m.View()
@@ -119,10 +148,84 @@ func TestTargetSelectionAndBatchApplyConfirmation(t *testing.T) {
 	}
 }
 
+func TestUnmanagedActionsEnterConfirmation(t *testing.T) {
+	entry := model.Entry{
+		Kind:       model.EntryUnmanaged,
+		TargetType: model.TargetFile,
+		TargetPath: "/dst/.zshrc",
+	}
+
+	m := newTestModel([]model.Entry{entry})
+	m.listMode = listModeUnmanaged
+
+	next, _ := m.Update(keyRunes("i"))
+	got := next.(Model)
+	if got.state != stateConfirming || got.confirmAction.kind != actionAdd {
+		t.Fatalf("unexpected add confirmation state: %#v", got.confirmAction)
+	}
+
+	next, _ = got.Update(keyRunes("d"))
+	got = next.(Model)
+	if got.state != stateConfirming || got.confirmAction.kind != actionAdd {
+		t.Fatalf("delete should not replace existing confirmation without reset")
+	}
+
+	got.state = stateNormal
+	got.confirmAction = pendingAction{}
+	next, _ = got.Update(keyRunes("d"))
+	got = next.(Model)
+	if got.state != stateConfirming || got.confirmAction.kind != actionDelete {
+		t.Fatalf("unexpected delete confirmation state: %#v", got.confirmAction)
+	}
+}
+
+func TestCommandPromptCreatesShellConfirmation(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+
+	next, _ := m.Update(keyRunes("!"))
+	m = next.(Model)
+	if m.state != stateCommandInput {
+		t.Fatalf("state = %v, want command input", m.state)
+	}
+
+	next, _ = m.Update(keyRunes("echo ok"))
+	m = next.(Model)
+	next, _ = m.Update(keyEnter())
+	m = next.(Model)
+
+	if m.state != stateConfirming {
+		t.Fatalf("state = %v, want confirming", m.state)
+	}
+	if m.confirmAction.kind != actionShell {
+		t.Fatalf("action kind = %v, want shell", m.confirmAction.kind)
+	}
+	if m.confirmAction.command != "echo ok" {
+		t.Fatalf("command = %q, want echo ok", m.confirmAction.command)
+	}
+}
+
+func TestSourceModeSwitchStartsSnapshotPreparation(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+
+	next, _ := m.Update(keyRunes("2"))
+	got := next.(Model)
+
+	if got.applySourceMode != gitmode.SourceModeStaged {
+		t.Fatalf("apply source = %v, want staged", got.applySourceMode)
+	}
+	if !got.snapshotLoading {
+		t.Fatalf("expected snapshot preparation to start")
+	}
+}
+
 func TestDiffFocusScrollsViewport(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetPath: "/dst/.zshrc"},
-		{SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetPath: "/dst/.gitconfig"},
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
 	})
 	m.focusedPane = paneDiff
 	m.diffCache["/dst/.zshrc"] = diffState{
@@ -151,9 +254,100 @@ func TestDiffFocusScrollsViewport(t *testing.T) {
 	}
 }
 
+func TestTabTogglesDiffFocusAndRestoresLastListPane(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+
+	next, _ := m.Update(keyRunes("h"))
+	m = next.(Model)
+	if m.focusedPane != paneSrc {
+		t.Fatalf("focused pane = %v, want src", m.focusedPane)
+	}
+
+	next, _ = m.Update(keyTab())
+	m = next.(Model)
+	if m.focusedPane != paneDiff {
+		t.Fatalf("focused pane = %v, want diff", m.focusedPane)
+	}
+
+	next, _ = m.Update(keyTab())
+	m = next.(Model)
+	if m.focusedPane != paneSrc {
+		t.Fatalf("focused pane = %v, want src after returning from diff", m.focusedPane)
+	}
+
+	next, _ = m.Update(keyRunes("l"))
+	m = next.(Model)
+	next, _ = m.Update(keyTab())
+	m = next.(Model)
+	next, _ = m.Update(keyTab())
+	m = next.(Model)
+	if m.focusedPane != paneTarget {
+		t.Fatalf("focused pane = %v, want target after returning from diff", m.focusedPane)
+	}
+}
+
+func TestMouseClickSelectsRowAndFocusesPane(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+	})
+
+	targetMetrics := m.listPaneMetrics(paneTarget, m.layout().rect(paneTarget))
+	next, _ := m.Update(mouseLeftPress(targetMetrics.pane.X+2, targetMetrics.pane.Y+targetMetrics.titleHeight+2))
+	got := next.(Model)
+
+	if got.focusedPane != paneTarget {
+		t.Fatalf("focused pane = %v, want target", got.focusedPane)
+	}
+	if got.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", got.cursor)
+	}
+
+	state, ok := got.diffCache["/dst/.gitconfig"]
+	if !ok || !state.loading {
+		t.Fatalf("expected clicked row diff to start loading, cache = %#v", state)
+	}
+}
+
+func TestMouseClickFocusesDiffPane(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+
+	layout := m.layout()
+	next, _ := m.Update(mouseLeftPress(layout.diff.X+1, layout.diff.Y+1))
+	got := next.(Model)
+
+	if got.focusedPane != paneDiff {
+		t.Fatalf("focused pane = %v, want diff", got.focusedPane)
+	}
+	if got.lastListPane != paneTarget {
+		t.Fatalf("last list pane = %v, want target", got.lastListPane)
+	}
+}
+
+func TestSelectedRowStylesPath(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			SourcePath: "/src/dot_zshrc",
+			TargetPath: "/dst/.zshrc",
+		},
+	})
+
+	row := m.renderEntryRow(m.entries[0], paneSrc, true, true, 64)
+	if !strings.Contains(row, selectedRowStyle.Render("/src/dot_zshrc")) {
+		t.Fatalf("selected row should style the path, row = %q", row)
+	}
+}
+
 func TestStaleDiffResultsAreIgnored(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetPath: "/dst/.zshrc"},
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
 	})
 	m.entryGeneration = 1
 	_ = m.requestDiffLoadCmd("/dst/.zshrc")
@@ -202,4 +396,22 @@ func keySpace() tea.KeyMsg {
 
 func keyDown() tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyDown}
+}
+
+func keyTab() tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyTab}
+}
+
+func keyEnter() tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyEnter}
+}
+
+func mouseLeftPress(x, y int) tea.MouseMsg {
+	return tea.MouseMsg{
+		X:      x,
+		Y:      y,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+		Type:   tea.MouseLeft,
+	}
 }
