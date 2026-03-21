@@ -47,6 +47,15 @@ func (m listMode) String() string {
 	}
 }
 
+func (m listMode) HeaderLabel() string {
+	switch m {
+	case listModeUnmanaged:
+		return "unmanaged: target-only"
+	default:
+		return "managed: tracked target diffs"
+	}
+}
+
 type pendingActionKind int
 
 const (
@@ -400,6 +409,47 @@ func (m *Model) reconcileSelections() {
 		}
 	}
 	m.selectedTargets = valid
+}
+
+func (m *Model) removeTargets(targetPaths ...string) bool {
+	if len(targetPaths) == 0 || len(m.entries) == 0 {
+		return false
+	}
+
+	removeSet := make(map[string]struct{}, len(targetPaths))
+	for _, targetPath := range targetPaths {
+		removeSet[targetPath] = struct{}{}
+	}
+
+	kept := make([]model.Entry, 0, len(m.entries))
+	removed := false
+	for _, entry := range m.entries {
+		if _, ok := removeSet[entry.TargetPath]; ok {
+			removed = true
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	if !removed {
+		return false
+	}
+
+	m.entries = kept
+	m.clearTargetSelections(targetPaths...)
+	m.pruneCaches()
+	m.reconcileSelections()
+	m.clampCursor()
+	m.syncDiffPreview(true)
+	return true
+}
+
+func (m *Model) applySuccessfulAction(action pendingAction) {
+	switch action.kind {
+	case actionApply:
+		m.removeTargets(action.targets...)
+	case actionAdd, actionDelete:
+		m.removeTargets(action.entry.TargetPath)
+	}
 }
 
 func (m Model) currentApplyTargets() []string {

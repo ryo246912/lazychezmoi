@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -176,6 +177,186 @@ func TestUnmanagedActionsEnterConfirmation(t *testing.T) {
 	got = next.(Model)
 	if got.state != stateConfirming || got.confirmAction.kind != actionDelete {
 		t.Fatalf("unexpected delete confirmation state: %#v", got.confirmAction)
+	}
+}
+
+func TestManagedAddEntersConfirmation(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+
+	next, _ := m.Update(keyRunes("i"))
+	got := next.(Model)
+	if got.state != stateConfirming || got.confirmAction.kind != actionAdd {
+		t.Fatalf("unexpected add confirmation state: %#v", got.confirmAction)
+	}
+
+	view := got.View()
+	if !strings.Contains(view, "Copy Current Target Into Source?") {
+		t.Fatalf("managed add confirmation missing copy wording: %q", view)
+	}
+}
+
+func TestFooterExplainsModeAndAddHint(t *testing.T) {
+	testCases := []struct {
+		name      string
+		listMode  listMode
+		entry     model.Entry
+		wantHints []string
+	}{
+		{
+			name:     "managed footer explains tracked mode",
+			listMode: listModeManaged,
+			entry: model.Entry{
+				Kind:       model.EntryManaged,
+				SourceCode: model.StatusModified,
+				TargetCode: model.StatusModified,
+				TargetType: model.TargetFile,
+				TargetPath: "/dst/.zshrc",
+			},
+			wantHints: []string{"i:add->src", "tracked entries with target-side diff"},
+		},
+		{
+			name:     "unmanaged footer explains target only mode",
+			listMode: listModeUnmanaged,
+			entry: model.Entry{
+				Kind:       model.EntryUnmanaged,
+				TargetType: model.TargetFile,
+				TargetPath: "/dst/.gitconfig",
+			},
+			wantHints: []string{"i:add", "target-only paths not yet tracked"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel([]model.Entry{tc.entry})
+			m.listMode = tc.listMode
+
+			footer := m.renderFooter()
+			for _, hint := range tc.wantHints {
+				if !strings.Contains(footer, hint) {
+					t.Fatalf("footer missing %q: %q", hint, footer)
+				}
+			}
+		})
+	}
+}
+
+func TestSuccessfulActionsUpdateEntriesImmediately(t *testing.T) {
+	testCases := []struct {
+		name        string
+		listMode    listMode
+		action      pendingAction
+		entries     []model.Entry
+		wantTargets []string
+		wantStatus  string
+	}{
+		{
+			name:     "apply removes applied target immediately",
+			listMode: listModeManaged,
+			action: pendingAction{
+				kind:    actionApply,
+				targets: []string{"/dst/.zshrc"},
+			},
+			entries: []model.Entry{
+				{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+				{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+			},
+			wantTargets: []string{"/dst/.gitconfig"},
+			wantStatus:  "Applied 1 file(s) from working tree",
+		},
+		{
+			name:     "managed add removes target immediately",
+			listMode: listModeManaged,
+			action: pendingAction{
+				kind:  actionAdd,
+				entry: model.Entry{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+			},
+			entries: []model.Entry{
+				{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+				{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+			},
+			wantTargets: []string{"/dst/.gitconfig"},
+			wantStatus:  "Updated source state from /dst/.zshrc",
+		},
+		{
+			name:     "unmanaged add removes target immediately",
+			listMode: listModeUnmanaged,
+			action: pendingAction{
+				kind:  actionAdd,
+				entry: model.Entry{Kind: model.EntryUnmanaged, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+			},
+			entries: []model.Entry{
+				{Kind: model.EntryUnmanaged, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+				{Kind: model.EntryUnmanaged, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+			},
+			wantTargets: []string{"/dst/.gitconfig"},
+			wantStatus:  "Added /dst/.zshrc to source state",
+		},
+		{
+			name:     "delete removes target immediately",
+			listMode: listModeUnmanaged,
+			action: pendingAction{
+				kind:  actionDelete,
+				entry: model.Entry{Kind: model.EntryUnmanaged, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+			},
+			entries: []model.Entry{
+				{Kind: model.EntryUnmanaged, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+				{Kind: model.EntryUnmanaged, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+			},
+			wantTargets: []string{"/dst/.gitconfig"},
+			wantStatus:  "Deleted /dst/.zshrc",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel(tc.entries)
+			m.listMode = tc.listMode
+
+			next, _ := m.Update(actionDoneMsg{action: tc.action})
+			got := next.(Model)
+
+			var targets []string
+			for _, entry := range got.entries {
+				targets = append(targets, entry.TargetPath)
+			}
+			if strings.Join(targets, ",") != strings.Join(tc.wantTargets, ",") {
+				t.Fatalf("targets = %v, want %v", targets, tc.wantTargets)
+			}
+			if got.statusMsg != tc.wantStatus {
+				t.Fatalf("status = %q, want %q", got.statusMsg, tc.wantStatus)
+			}
+		})
+	}
+}
+
+func TestPartialApplyFailureRemovesCompletedTargetsImmediately(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.tmux.conf"},
+	})
+
+	next, _ := m.Update(actionErrMsg{
+		action: pendingAction{
+			kind:    actionApply,
+			targets: []string{"/dst/.zshrc", "/dst/.gitconfig", "/dst/.tmux.conf"},
+		},
+		completed:    2,
+		failedTarget: "/dst/.tmux.conf",
+		err:          fmt.Errorf("apply failed"),
+	})
+	got := next.(Model)
+
+	var targets []string
+	for _, entry := range got.entries {
+		targets = append(targets, entry.TargetPath)
+	}
+	wantTargets := []string{"/dst/.tmux.conf"}
+	if strings.Join(targets, ",") != strings.Join(wantTargets, ",") {
+		t.Fatalf("targets = %v, want %v", targets, wantTargets)
 	}
 }
 
