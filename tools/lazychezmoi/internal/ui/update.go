@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -80,22 +81,32 @@ type editorErrMsg struct{ err error }
 
 func (m Model) loadEntriesCmd() tea.Cmd {
 	currentMode := m.listMode
+	chezmoi := m.chezmoi
 	return func() tea.Msg {
-		var (
-			entries []model.Entry
-			err     error
-		)
-
 		switch currentMode {
-		case listModeUnmanaged:
-			entries, err = m.chezmoi.Unmanaged()
+		case listModeAll:
+			managed, err := chezmoi.Status()
+			if err != nil {
+				return entriesErrMsg{mode: currentMode, err: err}
+			}
+			unmanaged, err := chezmoi.Unmanaged()
+			if err != nil {
+				return entriesErrMsg{mode: currentMode, err: err}
+			}
+			entries := make([]model.Entry, 0, len(managed)+len(unmanaged))
+			entries = append(entries, managed...)
+			entries = append(entries, unmanaged...)
+			sort.Slice(entries, func(i, j int) bool {
+				return entries[i].TargetPath < entries[j].TargetPath
+			})
+			return entriesLoadedMsg{mode: currentMode, entries: entries}
 		default:
-			entries, err = m.chezmoi.Status()
+			entries, err := chezmoi.Status()
+			if err != nil {
+				return entriesErrMsg{mode: currentMode, err: err}
+			}
+			return entriesLoadedMsg{mode: currentMode, entries: entries}
 		}
-		if err != nil {
-			return entriesErrMsg{mode: currentMode, err: err}
-		}
-		return entriesLoadedMsg{mode: currentMode, entries: entries}
 	}
 }
 
@@ -352,15 +363,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.invalidateDiffs()
 		m.syncDiffPreview(true)
 
-		if m.listMode == listModeManaged {
-			cmds = append(cmds, m.loadSourcePathsCmd())
-			if m.applySourceMode.RequiresSnapshot() {
-				if m.snapshotSource == "" && !m.snapshotLoading {
-					cmds = append(cmds, m.startSnapshotPreparation())
-				} else if m.snapshotSource != "" {
-					cmds = append(cmds, m.queueInitialDiffLoadsCmd())
-				}
-			} else {
+		cmds = append(cmds, m.loadSourcePathsCmd())
+		if m.applySourceMode.RequiresSnapshot() {
+			if m.snapshotSource == "" && !m.snapshotLoading {
+				cmds = append(cmds, m.startSnapshotPreparation())
+			} else if m.snapshotSource != "" {
 				cmds = append(cmds, m.queueInitialDiffLoadsCmd())
 			}
 		} else {
@@ -591,7 +598,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case "m":
 				if m.listMode == listModeManaged {
-					m.listMode = listModeUnmanaged
+					m.listMode = listModeAll
 				} else {
 					m.listMode = listModeManaged
 				}
@@ -608,12 +615,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMsg = fmt.Sprintf("Apply source set to %s", mode)
 				m.invalidateDiffs()
 				m.invalidateSnapshot()
-				if m.listMode == listModeManaged {
-					if mode.RequiresSnapshot() {
-						cmds = append(cmds, m.startSnapshotPreparation())
-					} else {
-						cmds = append(cmds, m.queueInitialDiffLoadsCmd())
-					}
+				if mode.RequiresSnapshot() {
+					cmds = append(cmds, m.startSnapshotPreparation())
+				} else {
+					cmds = append(cmds, m.queueInitialDiffLoadsCmd())
 				}
 
 			case "tab":
@@ -657,7 +662,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case " ", "space":
-				if m.focusedPane != paneTarget || m.listMode != listModeManaged {
+				if m.focusedPane != paneTarget {
 					break
 				}
 				entry := m.selectedEntry()
@@ -672,7 +677,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case "a":
-				if m.focusedPane != paneTarget || m.listMode != listModeManaged {
+				if m.focusedPane != paneTarget {
 					break
 				}
 				targets := m.currentApplyTargets()
@@ -712,7 +717,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMsg = ""
 
 			case "d":
-				if m.focusedPane != paneTarget || m.listMode != listModeUnmanaged {
+				if m.focusedPane != paneTarget {
 					break
 				}
 				entry := m.selectedEntry()

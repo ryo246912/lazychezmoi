@@ -157,7 +157,7 @@ func TestUnmanagedActionsEnterConfirmation(t *testing.T) {
 	}
 
 	m := newTestModel([]model.Entry{entry})
-	m.listMode = listModeUnmanaged
+	m.listMode = listModeAll
 
 	next, _ := m.Update(keyRunes("i"))
 	got := next.(Model)
@@ -218,13 +218,13 @@ func TestFooterExplainsModeAndAddHint(t *testing.T) {
 		},
 		{
 			name:     "unmanaged footer explains target only mode",
-			listMode: listModeUnmanaged,
+			listMode: listModeAll,
 			entry: model.Entry{
 				Kind:       model.EntryUnmanaged,
 				TargetType: model.TargetFile,
 				TargetPath: "/dst/.gitconfig",
 			},
-			wantHints: []string{"i:add", "target-only paths not yet tracked"},
+			wantHints: []string{"i:add->src/track", "managed diffs + unmanaged paths"},
 		},
 	}
 
@@ -282,7 +282,7 @@ func TestSuccessfulActionsUpdateEntriesImmediately(t *testing.T) {
 		},
 		{
 			name:     "unmanaged add removes target immediately",
-			listMode: listModeUnmanaged,
+			listMode: listModeAll,
 			action: pendingAction{
 				kind:  actionAdd,
 				entry: model.Entry{Kind: model.EntryUnmanaged, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
@@ -296,7 +296,7 @@ func TestSuccessfulActionsUpdateEntriesImmediately(t *testing.T) {
 		},
 		{
 			name:     "delete removes target immediately",
-			listMode: listModeUnmanaged,
+			listMode: listModeAll,
 			action: pendingAction{
 				kind:  actionDelete,
 				entry: model.Entry{Kind: model.EntryUnmanaged, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},

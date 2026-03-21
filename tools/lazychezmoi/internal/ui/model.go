@@ -35,13 +35,13 @@ type listMode int
 
 const (
 	listModeManaged listMode = iota
-	listModeUnmanaged
+	listModeAll
 )
 
 func (m listMode) String() string {
 	switch m {
-	case listModeUnmanaged:
-		return "unmanaged"
+	case listModeAll:
+		return "all"
 	default:
 		return "managed"
 	}
@@ -49,8 +49,8 @@ func (m listMode) String() string {
 
 func (m listMode) HeaderLabel() string {
 	switch m {
-	case listModeUnmanaged:
-		return "unmanaged: target-only"
+	case listModeAll:
+		return "all: managed + unmanaged"
 	default:
 		return "managed: tracked target diffs"
 	}
@@ -244,11 +244,7 @@ func (m Model) listPaneTitle(kind paneKind) string {
 		if m.listMode == listModeManaged {
 			title = "target (apply queue)"
 		} else {
-			title = "target (unmanaged)"
-		}
-	case paneSrc:
-		if m.listMode == listModeUnmanaged {
-			title = "src (missing)"
+			title = "target (apply queue / unmanaged)"
 		}
 	}
 
@@ -365,9 +361,6 @@ func (m Model) isTargetSelected(targetPath string) bool {
 }
 
 func (m Model) selectedTargetCount() int {
-	if m.listMode != listModeManaged {
-		return 0
-	}
 	return len(m.orderedSelectedTargets())
 }
 
@@ -460,9 +453,6 @@ func (m *Model) applySuccessfulAction(action pendingAction) {
 }
 
 func (m Model) currentApplyTargets() []string {
-	if m.listMode != listModeManaged {
-		return nil
-	}
 	if targets := m.orderedSelectedTargets(); len(targets) > 0 {
 		return targets
 	}
