@@ -60,9 +60,7 @@ func (m Model) renderHeader() string {
 	left := " lazychezmoi"
 
 	parts := []string{m.listMode.HeaderLabel()}
-	if m.listMode == listModeManaged {
-		parts = append(parts, fmt.Sprintf("apply source: %s", m.applySourceMode))
-	}
+	parts = append(parts, fmt.Sprintf("apply source: %s", m.applySourceMode))
 
 	if m.loadErr != nil {
 		parts = append(parts, errorStyle.Render(fmt.Sprintf("Error: %v", m.loadErr)))
@@ -100,27 +98,21 @@ func (m Model) renderFooter() string {
 func (m Model) renderKeyHints() string {
 	switch m.focusedPane {
 	case paneSrc:
-		if m.listMode == listModeManaged {
-			return " j/k:move  h/l:focus src/target  tab:focus diff  e:edit source  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
-		}
-		return " j/k:move  h/l:focus src/target  tab:focus diff  !:command  m:mode  r:refresh  ?:help  q:quit"
+		return " j/k:move  h/l:focus src/target  tab:focus diff  e:edit source  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 	case paneDiff:
-		if m.listMode == listModeManaged {
-			return " j/k/pgup/pgdn/g/G:scroll diff  tab:return to list  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
-		}
-		return " j/k/pgup/pgdn/g/G:scroll diff  tab:return to list  !:command  m:mode  r:refresh  ?:help  q:quit"
+		return " j/k/pgup/pgdn/g/G:scroll diff  tab:return to list  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 	default:
 		if m.listMode == listModeManaged {
 			return " j/k:move  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src  e:edit target  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 		}
-		return " j/k:move  h/l:focus src/target  tab:focus diff  i:add  d:delete  e:edit target  !:command  m:mode  r:refresh  ?:help  q:quit"
+		return " j/k:move  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src/track  d:delete unmanaged  e:edit  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 	}
 }
 
 func (m Model) renderModeHint() string {
-	hint := " mode: managed = tracked entries with target-side diff; target pane i copies the current target into source state"
-	if m.listMode == listModeUnmanaged {
-		hint = " mode: unmanaged = target-only paths not yet tracked by chezmoi; target pane i runs chezmoi add"
+	hint := " mode: managed = tracked entries with target-side diff; i copies target into source state"
+	if m.listMode == listModeAll {
+		hint = " mode: all = managed diffs + unmanaged paths; space/a:apply managed  i:add->src or track  d:delete unmanaged"
 	}
 	return truncateText(hint, max(1, m.width-2))
 }
@@ -130,8 +122,8 @@ func (m Model) renderHelp() string {
 
 Modes:
   managed       Entries already tracked by chezmoi with target-side diffs
-  unmanaged     Target-only paths that are not yet tracked by chezmoi
-  m             Toggle managed / unmanaged list mode
+  all           Managed entries with diffs plus unmanaged (target-only) paths
+  m             Toggle managed / all list mode
   1 / 2 / 3     Select apply source: working tree / staged / HEAD
   !             Enter a custom shell command for the selected entry
 
@@ -142,8 +134,9 @@ Keybindings:
   tab           Toggle diff focus
   space         Toggle current target in the apply queue (managed mode)
   a             Apply queued targets (or the current target) from the selected source mode
-  i             In target pane, run chezmoi add to update source from target (managed)
-                or start tracking the selected target path (unmanaged)
+  i             In target pane, patch source from target (managed template),
+                run chezmoi add to update source (managed non-template),
+                or start tracking the selected path (unmanaged / all mode)
   d             Delete the current unmanaged target after confirmation
   e             Open the focused src/target file in $EDITOR
   click         Focus the clicked pane; src/target row clicks also select it
@@ -201,7 +194,7 @@ func (m Model) renderEntryRow(entry model.Entry, kind paneKind, current, focused
 	path := m.entryPathForPane(entry, kind)
 	prefix := ""
 
-	if kind == paneTarget && m.listMode == listModeManaged {
+	if kind == paneTarget && entry.Kind == model.EntryManaged {
 		prefix = "[ ]"
 		if m.isTargetSelected(entry.TargetPath) {
 			prefix = "[x]"
@@ -307,8 +300,8 @@ func (m Model) renderDiffPane(width, height int) string {
 	switch {
 	case m.listMode == listModeManaged:
 		title = fmt.Sprintf(" diff preview (%s)", m.applySourceMode)
-	case m.listMode == listModeUnmanaged:
-		title = " diff preview (unmanaged target)"
+	case m.listMode == listModeAll:
+		title = fmt.Sprintf(" diff preview (%s / unmanaged)", m.applySourceMode)
 	}
 	if m.diffLoading && m.diffContent != "" {
 		title += " (refreshing...)"
@@ -338,9 +331,9 @@ func (m Model) renderDiffPane(width, height int) string {
 	switch {
 	case m.diffErr != nil:
 		content = errorStyle.Render(fmt.Sprintf("Error: %v", m.diffErr))
-	case m.listMode == listModeManaged && m.applySourceMode.RequiresSnapshot() && m.snapshotLoading:
+	case m.applySourceMode.RequiresSnapshot() && m.snapshotLoading:
 		content = fmt.Sprintf("Preparing %s snapshot...", m.applySourceMode)
-	case m.listMode == listModeManaged && m.applySourceMode.RequiresSnapshot() && m.snapshotErr != nil:
+	case m.applySourceMode.RequiresSnapshot() && m.snapshotErr != nil:
 		content = errorStyle.Render(fmt.Sprintf("Snapshot error: %v", m.snapshotErr))
 	case m.diffLoading && m.diffContent == "":
 		content = "Loading diff..."
@@ -413,6 +406,21 @@ func (m Model) renderConfirmModal() string {
 			truncatePath(m.confirmAction.entry.TargetPath, 64),
 			"",
 			commandStyle.Render(m.confirmAction.command),
+		)
+	case actionPatchSource:
+		title = "Patch Template Source?"
+		lines = append(lines,
+			"Apply target diff as a patch to the template source file:",
+			"",
+			truncatePath(m.confirmAction.entry.SourcePath, 64),
+		)
+	case actionPatchSourceConfirm:
+		title = "Conflicts Found - Apply Anyway?"
+		lines = append(lines,
+			"The patch could not be applied cleanly. Conflict markers will",
+			"be written to the source file for manual resolution:",
+			"",
+			truncatePath(m.confirmAction.entry.SourcePath, 64),
 		)
 	default:
 		title = "Confirm?"
