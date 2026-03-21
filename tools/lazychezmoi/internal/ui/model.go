@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -27,6 +28,7 @@ const (
 	stateNormal appState = iota
 	stateConfirming
 	stateCommandInput
+	stateFilterInput
 	stateHelp
 	stateRunningAction
 )
@@ -111,6 +113,7 @@ type Model struct {
 	chezmoi *chezmoi.Client
 
 	entries []model.Entry
+	rows    []listRow
 	cursor  int
 
 	focusedPane     paneKind
@@ -123,8 +126,12 @@ type Model struct {
 
 	sourcePathCache map[string]string
 	diffCache       map[string]diffState
+	expandedDirs    map[string]bool
+	dirChildren     map[string][]model.Entry
 	entryGeneration int
 	diffRequestSeq  int
+	pendingDiffSeq  int
+	pendingDiffPath string
 
 	sourceRoot        string
 	snapshotRoot      string
@@ -138,12 +145,16 @@ type Model struct {
 	diffLoading  bool
 	diffErr      error
 
-	commandInput string
+	commandInput   string
+	filterQuery    string
+	filterInput    string
+	entriesLoading bool
 
 	width  int
 	height int
 	ready  bool
 
+	spinner    spinner.Model
 	state      appState
 	statusMsg  string
 	loadErr    error
@@ -151,6 +162,10 @@ type Model struct {
 }
 
 func New(client *chezmoi.Client) Model {
+	spin := spinner.New()
+	spin.Spinner = spinner.Line
+	spin.Style = spinnerStyle
+
 	return Model{
 		chezmoi:         client,
 		focusedPane:     paneTarget,
@@ -160,7 +175,12 @@ func New(client *chezmoi.Client) Model {
 		selectedTargets: make(map[string]struct{}),
 		sourcePathCache: make(map[string]string),
 		diffCache:       make(map[string]diffState),
+		expandedDirs:    make(map[string]bool),
+		dirChildren:     make(map[string][]model.Entry),
+		entriesLoading:  true,
+		spinner:         spin,
 		openEditor:      openEditorCmd,
+		statusMsg:       "Loading entries...",
 	}
 }
 
@@ -248,9 +268,12 @@ func (m Model) listPaneTitle(kind paneKind) string {
 		}
 	}
 
-	titleText := fmt.Sprintf(" %s (%d)", title, len(m.entries))
+	titleText := fmt.Sprintf(" %s (%d rows)", title, len(m.rows))
 	if kind == paneTarget && m.selectedTargetCount() > 0 {
 		titleText = fmt.Sprintf(" %s (%d queued)", title, m.selectedTargetCount())
+	}
+	if m.filterQuery != "" {
+		titleText += fmt.Sprintf(" / %q", m.filterQuery)
 	}
 
 	return titleText
@@ -332,10 +355,12 @@ func (m Model) Cleanup() error {
 }
 
 func (m Model) selectedEntry() *model.Entry {
-	if len(m.entries) == 0 || m.cursor < 0 || m.cursor >= len(m.entries) {
+	row := m.selectedRow()
+	if row == nil || !row.hasEntry {
 		return nil
 	}
-	return &m.entries[m.cursor]
+	entry := row.entry
+	return &entry
 }
 
 func (m Model) entryIndex(targetPath string) int {
@@ -348,11 +373,21 @@ func (m Model) entryIndex(targetPath string) int {
 }
 
 func (m Model) entryByTarget(targetPath string) *model.Entry {
-	index := m.entryIndex(targetPath)
-	if index < 0 {
-		return nil
+	for i := range m.entries {
+		if m.entries[i].TargetPath == targetPath {
+			return &m.entries[i]
+		}
 	}
-	return &m.entries[index]
+	for _, children := range m.dirChildren {
+		for i := range children {
+			if children[i].TargetPath != targetPath {
+				continue
+			}
+			entry := children[i]
+			return &entry
+		}
+	}
+	return nil
 }
 
 func (m Model) isTargetSelected(targetPath string) bool {
@@ -412,7 +447,7 @@ func (m *Model) reconcileSelections() {
 }
 
 func (m *Model) removeTargets(targetPaths ...string) bool {
-	if len(targetPaths) == 0 || len(m.entries) == 0 {
+	if len(targetPaths) == 0 {
 		return false
 	}
 
@@ -430,15 +465,32 @@ func (m *Model) removeTargets(targetPaths ...string) bool {
 		}
 		kept = append(kept, entry)
 	}
+	for dirPath, children := range m.dirChildren {
+		keptChildren := make([]model.Entry, 0, len(children))
+		for _, child := range children {
+			if _, ok := removeSet[child.TargetPath]; ok {
+				removed = true
+				continue
+			}
+			keptChildren = append(keptChildren, child)
+		}
+		if len(keptChildren) == 0 {
+			delete(m.dirChildren, dirPath)
+			continue
+		}
+		m.dirChildren[dirPath] = keptChildren
+	}
+
 	if !removed {
 		return false
 	}
 
+	anchor := m.selectedRowKey()
 	m.entries = kept
 	m.clearTargetSelections(targetPaths...)
 	m.pruneCaches()
 	m.reconcileSelections()
-	m.clampCursor()
+	m.rebuildRows(anchor)
 	m.syncDiffPreview(true)
 	return true
 }
@@ -467,11 +519,16 @@ func (m *Model) resetCommandInput() {
 	m.commandInput = ""
 }
 
+func (m *Model) resetFilterInput() {
+	m.filterInput = m.filterQuery
+}
+
 func (m *Model) invalidateDiffs() {
 	m.diffCache = make(map[string]diffState)
 	m.diffContent = ""
 	m.diffErr = nil
 	m.diffLoading = false
+	m.pendingDiffPath = ""
 	m.diffViewport.SetContent("")
 }
 
@@ -499,6 +556,23 @@ func (m Model) diffSourceUnavailable() error {
 		return fmt.Errorf("%s snapshot is unavailable", m.applySourceMode)
 	}
 	return nil
+}
+
+func (m Model) isBusy() bool {
+	return m.entriesLoading || m.snapshotLoading || m.state == stateRunningAction
+}
+
+func (m Model) loadingIndicator() string {
+	switch {
+	case m.state == stateRunningAction && m.statusMsg != "":
+		return fmt.Sprintf("%s %s", m.spinner.View(), m.statusMsg)
+	case m.entriesLoading:
+		return fmt.Sprintf("%s Loading entries...", m.spinner.View())
+	case m.snapshotLoading:
+		return fmt.Sprintf("%s Preparing %s snapshot...", m.spinner.View(), m.applySourceMode)
+	default:
+		return ""
+	}
 }
 
 func (m Model) shellEnv(entry model.Entry) []string {
