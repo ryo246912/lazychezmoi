@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	gitmode "lazychezmoi/internal/git"
 	"lazychezmoi/internal/model"
@@ -618,6 +619,36 @@ func TestConfirmModalOverlaysMainView(t *testing.T) {
 	if !strings.Contains(view, "src (1 rows)") {
 		t.Fatalf("main view should remain visible behind modal: %q", view)
 	}
+}
+
+func TestConfirmModalOverlayKeepsUnderlyingColumns(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+	m.state = stateConfirming
+	m.confirmAction = pendingAction{kind: actionAdd, entry: m.entries[0]}
+
+	view := xansi.Strip(m.View())
+	for _, line := range strings.Split(view, "\n") {
+		if !strings.Contains(line, "Copy Current Target Into Source?") {
+			continue
+		}
+
+		leftBorder := strings.IndexRune(line, '║')
+		rightBorder := strings.LastIndex(line, "║")
+		if leftBorder <= 0 || rightBorder <= leftBorder {
+			t.Fatalf("unexpected modal line: %q", line)
+		}
+		if strings.TrimSpace(line[:leftBorder]) == "" {
+			t.Fatalf("left side of overlay row was cleared: %q", line)
+		}
+		if strings.TrimSpace(line[rightBorder+1:]) == "" {
+			t.Fatalf("right side of overlay row was cleared: %q", line)
+		}
+		return
+	}
+
+	t.Fatalf("overlay row with modal title not found: %q", view)
 }
 
 func TestHeaderShowsLoadingIndicator(t *testing.T) {
