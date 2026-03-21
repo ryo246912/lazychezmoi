@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"lazychezmoi/internal/model"
 )
@@ -424,15 +425,57 @@ func overlayCenteredBody(body, modal string, width, height int) string {
 	}
 
 	modalLines := strings.Split(modal, "\n")
+	modalWidth := 0
+	for _, line := range modalLines {
+		modalWidth = max(modalWidth, lipgloss.Width(line))
+	}
+	if modalWidth == 0 {
+		return strings.Join(baseLines, "\n")
+	}
+
+	left := max(0, (width-modalWidth)/2)
 	top := max(0, (height-len(modalLines))/2)
 	for i, line := range modalLines {
 		if top+i >= len(baseLines) {
 			break
 		}
-		baseLines[top+i] = lipgloss.Place(width, 1, lipgloss.Center, lipgloss.Top, line)
+		baseLines[top+i] = overlayLine(baseLines[top+i], line, width, left, modalWidth)
 	}
 
 	return strings.Join(baseLines, "\n")
+}
+
+func overlayLine(base, overlay string, width, left, overlayWidth int) string {
+	plain := padPlainLine(xansi.Strip(base), width)
+	rightStart := min(width, left+overlayWidth)
+	prefix := slicePlainLine(plain, 0, left)
+	suffix := slicePlainLine(plain, rightStart, width)
+	return prefix + overlay + suffix
+}
+
+func padPlainLine(line string, width int) string {
+	if lipgloss.Width(line) >= width {
+		return line
+	}
+	return line + strings.Repeat(" ", width-lipgloss.Width(line))
+}
+
+func slicePlainLine(line string, start, end int) string {
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+
+	runes := []rune(line)
+	if start > len(runes) {
+		start = len(runes)
+	}
+	if end > len(runes) {
+		end = len(runes)
+	}
+	return string(runes[start:end])
 }
 
 func (m Model) renderConfirmModal() string {
