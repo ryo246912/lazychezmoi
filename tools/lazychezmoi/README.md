@@ -5,8 +5,11 @@ A terminal UI for [chezmoi](https://www.chezmoi.io/) inspired by lazygit/gitui.
 ## Features
 
 - Browse changed dotfiles with a split-pane TUI
+- Toggle between managed changes and unmanaged target-only entries
 - Preview diffs inline with background caching and refresh
-- Apply one or many target files with confirmation
+- Apply one or many target files from `working tree`, `staged`, or `HEAD`
+- Add unmanaged targets into chezmoi source state and delete them from the target tree
+- Run a custom shell command with the selected entry exported as `LAZYCHEZMOI_*` environment variables
 - Open the focused source or target file in your `$EDITOR`
 - Refresh the file list at any time
 
@@ -39,15 +42,32 @@ lazychezmoi [flags]
 |-----|--------|
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
-| `tab` | Switch pane (`target` → `src` → diff) |
-| `shift+tab` | Switch pane (reverse) |
-| `space` | Toggle the current target in the apply queue |
-| `a` | Apply queued targets, or the current target if nothing is queued |
+| `h` / `l` | Focus `src` / `target` pane |
+| `tab` | Toggle diff focus |
+| `m` | Toggle `managed` / `unmanaged` mode |
+| `1` / `2` / `3` | Select apply source: `working tree` / `staged` / `HEAD` |
+| `space` | Toggle the current target in the apply queue (`managed` mode) |
+| `a` | Apply queued targets, or the current target if nothing is queued (`managed` mode) |
+| `i` | Add the current unmanaged target to chezmoi source state (`unmanaged` mode) |
+| `d` | Delete the current unmanaged target after confirmation (`unmanaged` mode) |
+| `!` | Enter a custom shell command for the selected entry |
 | `e` | Open the focused `src` or `target` file in `$EDITOR` |
+| Mouse click | Focus the clicked pane; clicking a `src` / `target` row also selects it |
 | `pgup` / `pgdn` / `g` / `G` | Scroll the focused diff |
 | `r` | Refresh file list |
 | `?` | Toggle help |
 | `q` / `ctrl+c` | Quit |
+
+### Shell Command Context
+
+Custom shell commands receive these environment variables:
+
+- `LAZYCHEZMOI_TARGET_PATH`
+- `LAZYCHEZMOI_SOURCE_PATH`
+- `LAZYCHEZMOI_ENTRY_MODE`
+- `LAZYCHEZMOI_TARGET_KIND`
+- `LAZYCHEZMOI_APPLY_SOURCE`
+- `LAZYCHEZMOI_LIST_MODE`
 
 ## Requirements
 

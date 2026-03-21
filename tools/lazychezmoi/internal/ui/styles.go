@@ -8,6 +8,7 @@ var (
 	colorGreen    = lipgloss.Color("42")
 	colorRed      = lipgloss.Color("196")
 	colorYellow   = lipgloss.Color("220")
+	colorCyan     = lipgloss.Color("81")
 	colorModalBg  = lipgloss.Color("236")
 
 	titleStyle = lipgloss.NewStyle().
@@ -39,9 +40,12 @@ var (
 					Background(colorInactive).
 					Foreground(lipgloss.Color("255"))
 
-	statusAddedStyle   = lipgloss.NewStyle().Foreground(colorGreen)
-	statusModStyle     = lipgloss.NewStyle().Foreground(colorYellow)
-	statusDeletedStyle = lipgloss.NewStyle().Foreground(colorRed)
+	statusAddedStyle     = lipgloss.NewStyle().Foreground(colorGreen)
+	statusModStyle       = lipgloss.NewStyle().Foreground(colorYellow)
+	statusDeletedStyle   = lipgloss.NewStyle().Foreground(colorRed)
+	statusUnmanagedStyle = lipgloss.NewStyle().
+				Foreground(colorCyan).
+				Bold(true)
 
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -73,4 +77,14 @@ var (
 
 	modalBodyStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252"))
+
+	commandStyle = lipgloss.NewStyle().
+			Foreground(colorCyan).
+			Background(lipgloss.Color("235")).
+			Padding(0, 1)
+
+	commandInputStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Background(lipgloss.Color("235")).
+				Padding(0, 1)
 )
