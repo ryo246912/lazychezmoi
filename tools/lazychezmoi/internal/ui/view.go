@@ -2,9 +2,11 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"lazychezmoi/internal/model"
 )
@@ -31,9 +33,9 @@ func (m Model) View() string {
 	body := m.renderMain(contentH)
 	switch m.state {
 	case stateConfirming:
-		body = lipgloss.Place(m.width, contentH, lipgloss.Center, lipgloss.Center, m.renderConfirmModal())
+		body = overlayCenteredBody(body, m.renderConfirmModal(), m.width, contentH)
 	case stateCommandInput:
-		body = lipgloss.Place(m.width, contentH, lipgloss.Center, lipgloss.Center, m.renderCommandInputModal())
+		body = overlayCenteredBody(body, m.renderCommandInputModal(), m.width, contentH)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
@@ -61,14 +63,21 @@ func (m Model) renderHeader() string {
 
 	parts := []string{m.listMode.HeaderLabel()}
 	parts = append(parts, fmt.Sprintf("apply source: %s", m.applySourceMode))
+	if m.filterQuery != "" || m.state == stateFilterInput {
+		parts = append(parts, filterStyle.Render("filter: /"+m.filterInput))
+	}
 
 	if m.loadErr != nil {
 		parts = append(parts, errorStyle.Render(fmt.Sprintf("Error: %v", m.loadErr)))
 	} else {
 		parts = append(parts, fmt.Sprintf("%d entries", len(m.entries)))
+		parts = append(parts, fmt.Sprintf("%d rows", len(m.rows)))
 		if queued := m.selectedTargetCount(); queued > 0 {
 			parts = append(parts, fmt.Sprintf("%d queued", queued))
 		}
+	}
+	if indicator := m.loadingIndicator(); indicator != "" {
+		parts = append(parts, indicator)
 	}
 
 	return headerStyle.Width(m.width).Render(left + " | " + strings.Join(parts, " | "))
@@ -79,11 +88,14 @@ func (m Model) renderFooter() string {
 
 	switch m.state {
 	case stateRunningAction:
-		lines = append(lines, m.statusMsg)
+		lines = append(lines, m.loadingIndicator())
 	case stateConfirming:
 		lines = append(lines, "y:confirm  n/esc:cancel")
 	case stateCommandInput:
 		lines = append(lines, "enter:confirm  esc:cancel")
+	case stateFilterInput:
+		lines = append(lines, filterStyle.Render("/"+m.filterInput))
+		lines = append(lines, "enter:apply  esc:clear")
 	default:
 		if m.statusMsg != "" {
 			lines = append(lines, m.statusMsg)
@@ -98,14 +110,14 @@ func (m Model) renderFooter() string {
 func (m Model) renderKeyHints() string {
 	switch m.focusedPane {
 	case paneSrc:
-		return " j/k:move  h/l:focus src/target  tab:focus diff  e:edit source  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
+		return " j/k:move  enter:toggle dir  /:filter  h/l:focus src/target  tab:focus diff  e:edit source  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 	case paneDiff:
-		return " j/k/pgup/pgdn/g/G:scroll diff  tab:return to list  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
+		return " j/k/pgup/pgdn/g/G:scroll diff  /:filter  tab:return to list  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 	default:
 		if m.listMode == listModeManaged {
-			return " j/k:move  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src  e:edit target  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
+			return " j/k:move  enter:toggle dir  /:filter  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src  e:edit target  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 		}
-		return " j/k:move  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src/track  d:delete unmanaged  e:edit  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
+		return " j/k:move  enter:toggle dir  /:filter  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src/track  d:delete unmanaged  e:edit  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 	}
 }
 
@@ -130,6 +142,8 @@ Modes:
 Keybindings:
   j / down      Move down in src/target or scroll diff
   k / up        Move up in src/target or scroll diff
+  enter         Expand or collapse the selected directory row
+  /             Start filter input for the file tree
   h / l         Focus src / target pane
   tab           Toggle diff focus
   space         Toggle current target in the apply queue (managed mode)
@@ -139,7 +153,8 @@ Keybindings:
                 or start tracking the selected path (unmanaged / all mode)
   d             Delete the current unmanaged target after confirmation
   e             Open the focused src/target file in $EDITOR
-  click         Focus the clicked pane; src/target row clicks also select it
+  click         Focus the clicked pane; row clicks select and focus that file
+  wheel         Scroll the hovered src/target tree
   r             Refresh file list, snapshots, and diff cache
   ?             Toggle this help
   q / ctrl+c    Quit
@@ -169,13 +184,17 @@ func (m Model) renderListPane(kind paneKind, width, height int) string {
 	}
 
 	var rows []string
-	for i := metrics.offset; i < len(m.entries) && i < metrics.offset+metrics.listHeight; i++ {
-		entry := m.entries[i]
-		rows = append(rows, m.renderEntryRow(entry, kind, i == m.cursor, focused, metrics.listWidth))
+	for i := metrics.offset; i < len(m.rows) && i < metrics.offset+metrics.listHeight; i++ {
+		row := m.rows[i]
+		rows = append(rows, m.renderEntryRow(row, kind, i == m.cursor, focused, metrics.listWidth))
 	}
 
-	if len(m.entries) == 0 {
-		rows = append(rows, "  (no entries)")
+	if len(m.rows) == 0 {
+		if m.filterQuery != "" {
+			rows = append(rows, "  (no matching rows)")
+		} else {
+			rows = append(rows, "  (no entries)")
+		}
 	}
 	for len(rows) < metrics.listHeight {
 		rows = append(rows, "")
@@ -190,24 +209,24 @@ func (m Model) renderListPane(kind paneKind, width, height int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, titleBar, borderStyle.Render(content))
 }
 
-func (m Model) renderEntryRow(entry model.Entry, kind paneKind, current, focused bool, maxWidth int) string {
-	path := m.entryPathForPane(entry, kind)
+func (m Model) renderEntryRow(row listRow, kind paneKind, current, focused bool, maxWidth int) string {
+	path := m.rowPathForPane(row, kind)
 	prefix := ""
 
-	if kind == paneTarget && entry.Kind == model.EntryManaged {
+	if kind == paneTarget && row.hasEntry && row.entry.Kind == model.EntryManaged && row.entry.CanApply() {
 		prefix = "[ ]"
-		if m.isTargetSelected(entry.TargetPath) {
+		if m.isTargetSelected(row.entry.TargetPath) {
 			prefix = "[x]"
 		}
 	}
 
-	fixedWidth := lipgloss.Width(m.statusLabel(entry)) + 1
+	fixedWidth := lipgloss.Width(m.statusLabelForRow(row)) + 1
 	if prefix != "" {
 		fixedWidth += lipgloss.Width(prefix) + 1
 	}
-	path = truncatePath(path, max(1, maxWidth-fixedWidth))
+	path = truncateText(path, max(1, maxWidth-fixedWidth))
 
-	badge := m.renderStatusBadge(entry, current, focused)
+	badge := m.renderStatusBadge(row, current, focused)
 	switch {
 	case current && focused:
 		return renderSelectedRow(prefix, badge, path, selectedRowStyle, maxWidth)
@@ -222,33 +241,65 @@ func (m Model) renderEntryRow(entry model.Entry, kind paneKind, current, focused
 	}
 }
 
-func (m Model) entryPathForPane(entry model.Entry, kind paneKind) string {
+func (m Model) rowPathForPane(row listRow, kind paneKind) string {
+	indent := strings.Repeat("  ", row.depth)
+	marker := "- "
+	if row.directory {
+		marker = "> "
+		if row.expanded || m.filterQuery != "" {
+			marker = "v "
+		}
+	}
+
+	label := row.name
 	switch kind {
 	case paneSrc:
-		if entry.Kind == model.EntryUnmanaged {
-			return "(missing) " + entry.TargetPath
+		label = m.rowSourceLabel(row)
+	case paneTarget:
+		if row.directory {
+			label += string(filepath.Separator)
 		}
-		if entry.SourcePath != "" {
-			return entry.SourcePath
-		}
-		return "(resolving) " + entry.TargetPath
-	default:
-		return entry.TargetPath
 	}
+	if kind == paneSrc && row.directory {
+		label += string(filepath.Separator)
+	}
+
+	return indent + marker + label
 }
 
-func (m Model) renderStatusBadge(entry model.Entry, current, focused bool) string {
-	style := statusModStyle
-	if entry.Kind == model.EntryUnmanaged {
-		style = statusUnmanagedStyle
-	} else {
-		switch entry.TargetCode {
-		case model.StatusAdded:
-			style = statusAddedStyle
-		case model.StatusModified:
-			style = statusModStyle
-		case model.StatusDeleted:
-			style = statusDeletedStyle
+func (m Model) rowSourceLabel(row listRow) string {
+	if row.directory {
+		return row.name
+	}
+	if !row.hasEntry {
+		return row.name
+	}
+	if row.entry.Kind == model.EntryUnmanaged {
+		return "(missing) " + row.name
+	}
+	if row.entry.SourcePath == "" {
+		return "(resolving) " + row.name
+	}
+	return filepath.Base(row.entry.SourcePath)
+}
+
+func (m Model) renderStatusBadge(row listRow, current, focused bool) string {
+	style := statusDirStyle
+	label := m.statusLabelForRow(row)
+
+	if row.hasEntry {
+		style = statusModStyle
+		if row.entry.Kind == model.EntryUnmanaged {
+			style = statusUnmanagedStyle
+		} else {
+			switch row.entry.TargetCode {
+			case model.StatusAdded:
+				style = statusAddedStyle
+			case model.StatusModified:
+				style = statusModStyle
+			case model.StatusDeleted:
+				style = statusDeletedStyle
+			}
 		}
 	}
 
@@ -259,7 +310,7 @@ func (m Model) renderStatusBadge(entry model.Entry, current, focused bool) strin
 		style = style.Background(colorInactive).Foreground(lipgloss.Color("255"))
 	}
 
-	return style.Render(m.statusLabel(entry))
+	return style.Render(label)
 }
 
 func (m Model) statusLabel(entry model.Entry) string {
@@ -274,6 +325,13 @@ func (m Model) statusLabel(entry model.Entry) string {
 		}
 	}
 	return string([]byte{byte(entry.SourceCode), byte(entry.TargetCode)})
+}
+
+func (m Model) statusLabelForRow(row listRow) string {
+	if !row.hasEntry {
+		return "DR"
+	}
+	return m.statusLabel(row.entry)
 }
 
 func renderSelectedRow(prefix, badge, path string, rowStyle lipgloss.Style, maxWidth int) string {
@@ -303,7 +361,10 @@ func (m Model) renderDiffPane(width, height int) string {
 	case m.listMode == listModeAll:
 		title = fmt.Sprintf(" diff preview (%s / unmanaged)", m.applySourceMode)
 	}
-	if m.diffLoading && m.diffContent != "" {
+	selected := m.selectedEntry()
+	if selected != nil && m.pendingDiffPath == selected.TargetPath {
+		title += " (refresh pending...)"
+	} else if m.diffLoading && m.diffContent != "" {
 		title += " (refreshing...)"
 	} else if m.diffLoading {
 		title += " (loading...)"
@@ -332,12 +393,12 @@ func (m Model) renderDiffPane(width, height int) string {
 	case m.diffErr != nil:
 		content = errorStyle.Render(fmt.Sprintf("Error: %v", m.diffErr))
 	case m.applySourceMode.RequiresSnapshot() && m.snapshotLoading:
-		content = fmt.Sprintf("Preparing %s snapshot...", m.applySourceMode)
+		content = fmt.Sprintf("%s Preparing %s snapshot...", m.spinner.View(), m.applySourceMode)
 	case m.applySourceMode.RequiresSnapshot() && m.snapshotErr != nil:
 		content = errorStyle.Render(fmt.Sprintf("Snapshot error: %v", m.snapshotErr))
 	case m.diffLoading && m.diffContent == "":
-		content = "Loading diff..."
-	case m.diffContent == "" && len(m.entries) == 0:
+		content = fmt.Sprintf("%s Loading diff...", m.spinner.View())
+	case m.diffContent == "" && len(m.rows) == 0:
 		content = "(no entries)"
 	case m.diffContent == "":
 		content = "Waiting for diff..."
@@ -351,6 +412,70 @@ func (m Model) renderDiffPane(width, height int) string {
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, titleBar, borderStyle.Render(content))
+}
+
+func overlayCenteredBody(body, modal string, width, height int) string {
+	baseLines := strings.Split(body, "\n")
+	if len(baseLines) < height {
+		padding := make([]string, height-len(baseLines))
+		baseLines = append(baseLines, padding...)
+	}
+	if len(baseLines) > height {
+		baseLines = baseLines[:height]
+	}
+
+	modalLines := strings.Split(modal, "\n")
+	modalWidth := 0
+	for _, line := range modalLines {
+		modalWidth = max(modalWidth, lipgloss.Width(line))
+	}
+	if modalWidth == 0 {
+		return strings.Join(baseLines, "\n")
+	}
+
+	left := max(0, (width-modalWidth)/2)
+	top := max(0, (height-len(modalLines))/2)
+	for i, line := range modalLines {
+		if top+i >= len(baseLines) {
+			break
+		}
+		baseLines[top+i] = overlayLine(baseLines[top+i], line, width, left, modalWidth)
+	}
+
+	return strings.Join(baseLines, "\n")
+}
+
+func overlayLine(base, overlay string, width, left, overlayWidth int) string {
+	plain := padPlainLine(xansi.Strip(base), width)
+	rightStart := min(width, left+overlayWidth)
+	prefix := slicePlainLine(plain, 0, left)
+	suffix := slicePlainLine(plain, rightStart, width)
+	return prefix + overlay + suffix
+}
+
+func padPlainLine(line string, width int) string {
+	if lipgloss.Width(line) >= width {
+		return line
+	}
+	return line + strings.Repeat(" ", width-lipgloss.Width(line))
+}
+
+func slicePlainLine(line string, start, end int) string {
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+
+	runes := []rune(line)
+	if start > len(runes) {
+		start = len(runes)
+	}
+	if end > len(runes) {
+		end = len(runes)
+	}
+	return string(runes[start:end])
 }
 
 func (m Model) renderConfirmModal() string {

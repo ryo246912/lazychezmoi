@@ -2,7 +2,6 @@ package chezmoi
 
 import (
 	"bytes"
-	"os"
 	"strings"
 
 	"lazychezmoi/internal/model"
@@ -65,18 +64,4 @@ func ParseUnmanaged(data []byte) []model.Entry {
 	return entries
 }
 
-func detectTargetType(path string) model.TargetKind {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return model.TargetUnknown
-	}
-
-	switch mode := info.Mode(); {
-	case mode&os.ModeSymlink != 0:
-		return model.TargetSymlink
-	case mode.IsDir():
-		return model.TargetDirectory
-	default:
-		return model.TargetFile
-	}
-}
+func detectTargetType(path string) model.TargetKind { return model.DetectTargetKind(path) }

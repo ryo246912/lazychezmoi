@@ -1,6 +1,7 @@
 package model
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -115,4 +116,20 @@ func (e Entry) StatusLabel() string {
 
 func (e Entry) Name() string {
 	return filepath.Base(e.TargetPath)
+}
+
+func DetectTargetKind(path string) TargetKind {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return TargetUnknown
+	}
+
+	switch mode := info.Mode(); {
+	case mode&os.ModeSymlink != 0:
+		return TargetSymlink
+	case mode.IsDir():
+		return TargetDirectory
+	default:
+		return TargetFile
+	}
 }
