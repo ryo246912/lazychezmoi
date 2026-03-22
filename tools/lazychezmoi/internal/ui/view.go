@@ -23,10 +23,7 @@ func (m Model) View() string {
 
 	headerH := lipgloss.Height(header)
 	footerH := lipgloss.Height(footer)
-	contentH := m.height - headerH - footerH
-	if contentH < 2 {
-		contentH = 2
-	}
+	contentH := max(2, m.height-headerH-footerH)
 
 	body := m.renderMain(contentH)
 	switch m.state {
@@ -297,10 +294,10 @@ func renderSelectedRow(prefix, badge, path string, rowStyle lipgloss.Style, maxW
 
 func (m Model) renderDiffPane(width, height int) string {
 	title := " diff preview"
-	switch {
-	case m.listMode == listModeManaged:
+	switch m.listMode {
+	case listModeManaged:
 		title = fmt.Sprintf(" diff preview (%s)", m.applySourceMode)
-	case m.listMode == listModeAll:
+	case listModeAll:
 		title = fmt.Sprintf(" diff preview (%s / unmanaged)", m.applySourceMode)
 	}
 	if m.diffLoading && m.diffContent != "" {
@@ -315,14 +312,8 @@ func (m Model) renderDiffPane(width, height int) string {
 	}
 
 	titleH := lipgloss.Height(titleBar)
-	innerH := height - titleH - 2
-	if innerH < 1 {
-		innerH = 1
-	}
-	innerW := width - 2
-	if innerW < 1 {
-		innerW = 1
-	}
+	innerH := max(1, height-titleH-2)
+	innerW := max(1, width-2)
 
 	m.diffViewport.Width = innerW
 	m.diffViewport.Height = innerH

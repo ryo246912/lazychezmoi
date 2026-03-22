@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -110,7 +111,12 @@ func (m Model) loadEntriesCmd() tea.Cmd {
 	}
 }
 
-func (m Model) loadDiffCmd(entry model.Entry, generation, requestID int, applySourceMode gitmode.SourceMode, snapshotSource string) tea.Cmd {
+func (m Model) loadDiffCmd(
+	entry model.Entry,
+	generation, requestID int,
+	applySourceMode gitmode.SourceMode,
+	snapshotSource string,
+) tea.Cmd {
 	return func() tea.Msg {
 		if entry.Kind == model.EntryUnmanaged {
 			content, err := buildUnmanagedDiff(entry)
@@ -290,7 +296,7 @@ func (m Model) runActionCmd(action pendingAction) tea.Cmd {
 			}
 
 			info, err := os.Stat(sourcePath)
-			perm := os.FileMode(0644)
+			perm := os.FileMode(0o644)
 			if err == nil {
 				perm = info.Mode()
 			}
@@ -302,7 +308,7 @@ func (m Model) runActionCmd(action pendingAction) tea.Cmd {
 		case actionPatchSourceConfirm:
 			sourcePath := action.entry.SourcePath
 			info, err := os.Stat(sourcePath)
-			perm := os.FileMode(0644)
+			perm := os.FileMode(0o644)
 			if err == nil {
 				perm = info.Mode()
 			}
@@ -333,10 +339,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		headerH := lipgloss.Height(m.renderHeader())
 		footerH := lipgloss.Height(m.renderFooter())
-		contentH := m.height - headerH - footerH
-		if contentH < 2 {
-			contentH = 2
-		}
+		contentH := max(2, m.height-headerH-footerH)
 
 		rightW := m.width - m.width/3 - 2
 		diffH := contentH - 2
@@ -967,7 +970,7 @@ func openEditorCmd(path string) tea.Cmd {
 	if editor == "" {
 		editor = "vi"
 	}
-	cmd := exec.Command(editor, path)
+	cmd := exec.CommandContext(context.Background(), editor, path)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		if err != nil {
 			return editorErrMsg{err: fmt.Errorf("editor: %w", err)}
@@ -982,7 +985,7 @@ func runShellCommandCmd(command string, env []string, action pendingAction) tea.
 		shell = "sh"
 	}
 
-	cmd := exec.Command(shell, "-lc", command)
+	cmd := exec.CommandContext(context.Background(), shell, "-lc", command)
 	cmd.Env = append(os.Environ(), env...)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
 		if err != nil {

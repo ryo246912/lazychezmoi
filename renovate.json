@@ -1,0 +1,7 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>ryo246912/renovate-config"],
+  "mise": {
+    "managerFilePatterns": ["(^|/)mise\\.toml$"]
+  }
+}

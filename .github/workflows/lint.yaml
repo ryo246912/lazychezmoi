@@ -1,0 +1,75 @@
+name: lint
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/lazychezmoi/**"
+      - "mise.toml"
+      - "renovate.json"
+      - ".github/workflows/lazychezmoi.yaml"
+      - ".github/workflows/lazychezmoi-lint.yaml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "tools/lazychezmoi/**"
+      - "mise.toml"
+      - "renovate.json"
+      - ".github/workflows/lazychezmoi.yaml"
+      - ".github/workflows/lazychezmoi-lint.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  golangci-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: tools/lazychezmoi/go.mod
+          cache-dependency-path: tools/lazychezmoi/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+        with:
+          version: v2.11.3
+          working-directory: tools/lazychezmoi
+
+  go-mod-tidy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/lazychezmoi
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: tools/lazychezmoi/go.mod
+          cache-dependency-path: tools/lazychezmoi/go.sum
+      - name: Ensure go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/lazychezmoi
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.25.8"
+          cache-dependency-path: tools/lazychezmoi/go.sum
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...

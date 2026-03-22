@@ -1,14 +1,62 @@
 [tools]
 go = "1.22"
+golangci-lint = "2.11.3"
+goreleaser = "2.14.3"
+"go:golang.org/x/vuln/cmd/govulncheck" = "v1.1.4"
 
-[tasks."test-lazychezmoi"]
+[tasks.fmt]
+description = "Format lazychezmoi Go code"
+run = "cd tools/lazychezmoi && golangci-lint fmt"
+
+[tasks.lint]
+description = "Lint lazychezmoi Go code"
+run = "cd tools/lazychezmoi && golangci-lint run"
+
+[tasks."lint-fix"]
+description = "Format and autofix lazychezmoi issues"
+run = """
+cd tools/lazychezmoi
+golangci-lint fmt
+golangci-lint run --fix
+"""
+
+[tasks.test]
 run = "cd tools/lazychezmoi && go test ./..."
 description = "Run lazychezmoi tests"
 
-[tasks."build-lazychezmoi"]
-run = "cd tools/lazychezmoi && go build ./cmd/lazychezmoi"
-description = "Build lazychezmoi binary"
+[tasks.vet]
+description = "Run go vet for lazychezmoi"
+run = "cd tools/lazychezmoi && go vet ./..."
 
-[tasks."release-lazychezmoi-snapshot"]
+[tasks.govulncheck]
+description = "Run govulncheck for lazychezmoi"
+run = "cd tools/lazychezmoi && GOTOOLCHAIN=go1.25.8 govulncheck ./..."
+
+[tasks."tidy-check"]
+description = "Ensure lazychezmoi Go modules stay tidy"
+run = """
+cd tools/lazychezmoi
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+"""
+
+[tasks.check]
+description = "Run the lazychezmoi validation suite"
+run = """
+actionlint
+cd tools/lazychezmoi
+golangci-lint run
+go test ./...
+go vet ./...
+GOTOOLCHAIN=go1.25.8 govulncheck ./...
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+"""
+
+[tasks.build]
+run = "cd tools/lazychezmoi && go build ./..."
+description = "Build lazychezmoi"
+
+[tasks."release-snapshot"]
 run = "cd tools/lazychezmoi && goreleaser release --snapshot --clean"
 description = "Build lazychezmoi snapshot release"
