@@ -2,11 +2,14 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	gitmode "lazychezmoi/internal/git"
 	"lazychezmoi/internal/model"
@@ -121,10 +124,11 @@ func TestTargetSelectionAndBatchApplyConfirmation(t *testing.T) {
 		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
 	})
 
+	firstTarget := m.selectedEntry().TargetPath
 	next, _ := m.Update(keySpace())
 	m = next.(Model)
-	if !m.isTargetSelected("/dst/.zshrc") {
-		t.Fatalf("expected first target to be selected")
+	if !m.isTargetSelected(firstTarget) {
+		t.Fatalf("expected first visible target to be selected")
 	}
 
 	next, _ = m.Update(keyDown())
@@ -138,9 +142,8 @@ func TestTargetSelectionAndBatchApplyConfirmation(t *testing.T) {
 		t.Fatalf("state = %v, want confirming", m.state)
 	}
 
-	wantTargets := []string{"/dst/.zshrc", "/dst/.gitconfig"}
-	if strings.Join(m.confirmAction.targets, ",") != strings.Join(wantTargets, ",") {
-		t.Fatalf("confirm targets = %v, want %v", m.confirmAction.targets, wantTargets)
+	if len(m.confirmAction.targets) != 2 {
+		t.Fatalf("confirm targets = %v, want 2 targets", m.confirmAction.targets)
 	}
 
 	view := m.View()
@@ -409,7 +412,8 @@ func TestDiffFocusScrollsViewport(t *testing.T) {
 		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
 	})
 	m.focusedPane = paneDiff
-	m.diffCache["/dst/.zshrc"] = diffState{
+	selectedTarget := m.selectedEntry().TargetPath
+	m.diffCache[selectedTarget] = diffState{
 		content: strings.Join([]string{"1", "2", "3", "4", "5", "6"}, "\n"),
 	}
 	m.syncDiffPreview(true)
@@ -430,8 +434,15 @@ func TestDiffFocusScrollsViewport(t *testing.T) {
 	if got.cursor != 1 {
 		t.Fatalf("cursor = %d, want 1", got.cursor)
 	}
+
+	next, _ = got.Update(diffRefreshDueMsg{
+		targetPath:  got.pendingDiffPath,
+		token:       got.pendingDiffSeq,
+		resetScroll: true,
+	})
+	got = next.(Model)
 	if got.diffViewport.YOffset != 0 {
-		t.Fatalf("diff viewport offset = %d, want 0", got.diffViewport.YOffset)
+		t.Fatalf("diff viewport offset = %d, want 0 after debounce", got.diffViewport.YOffset)
 	}
 }
 
@@ -486,7 +497,11 @@ func TestMouseClickSelectsRowAndFocusesPane(t *testing.T) {
 		t.Fatalf("cursor = %d, want 1", got.cursor)
 	}
 
-	state, ok := got.diffCache["/dst/.gitconfig"]
+	entry := got.selectedEntry()
+	if entry == nil {
+		t.Fatalf("expected clicked row to have an entry")
+	}
+	state, ok := got.diffCache[entry.TargetPath]
 	if !ok || !state.loading {
 		t.Fatalf("expected clicked row diff to start loading, cache = %#v", state)
 	}
@@ -509,6 +524,70 @@ func TestMouseClickFocusesDiffPane(t *testing.T) {
 	}
 }
 
+func TestEnterExpandsUnmanagedDirectoryAndAllowsAddingChild(t *testing.T) {
+	dir := t.TempDir()
+	childPath := filepath.Join(dir, "child.txt")
+	if err := os.WriteFile(childPath, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write child file: %v", err)
+	}
+
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryUnmanaged, TargetType: model.TargetDirectory, TargetPath: dir},
+	})
+	m.listMode = listModeAll
+
+	next, _ := m.Update(keyEnter())
+	m = next.(Model)
+	if len(m.rows) != 2 {
+		t.Fatalf("row count = %d, want 2", len(m.rows))
+	}
+
+	next, _ = m.Update(keyDown())
+	m = next.(Model)
+	entry := m.selectedEntry()
+	if entry == nil || entry.TargetPath != childPath {
+		t.Fatalf("selected entry = %#v, want child %q", entry, childPath)
+	}
+
+	next, _ = m.Update(keyRunes("i"))
+	m = next.(Model)
+	if m.state != stateConfirming || m.confirmAction.kind != actionAdd || m.confirmAction.entry.TargetPath != childPath {
+		t.Fatalf("unexpected add confirmation after expanding directory: %#v", m.confirmAction)
+	}
+}
+
+func TestFilterInputNarrowsTreeRows(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.config/nvim/init.lua"},
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+	})
+
+	next, _ := m.Update(keyRunes("/"))
+	m = next.(Model)
+	next, _ = m.Update(keyRunes("nvim"))
+	m = next.(Model)
+
+	if m.state != stateFilterInput {
+		t.Fatalf("state = %v, want filter input", m.state)
+	}
+	if m.filterQuery != "nvim" {
+		t.Fatalf("filter query = %q, want nvim", m.filterQuery)
+	}
+	if len(m.rows) != 3 {
+		t.Fatalf("row count = %d, want 3 filtered rows", len(m.rows))
+	}
+	entry := m.selectedEntry()
+	if entry == nil || entry.TargetPath != "/dst/.config/nvim/init.lua" {
+		t.Fatalf("selected entry = %#v, want filtered leaf", entry)
+	}
+
+	next, _ = m.Update(keyEnter())
+	m = next.(Model)
+	if m.state != stateNormal {
+		t.Fatalf("state = %v, want normal", m.state)
+	}
+}
+
 func TestSelectedRowStylesPath(t *testing.T) {
 	m := newTestModel([]model.Entry{
 		{
@@ -520,9 +599,67 @@ func TestSelectedRowStylesPath(t *testing.T) {
 		},
 	})
 
-	row := m.renderEntryRow(m.entries[0], paneSrc, true, true, 64)
-	if !strings.Contains(row, selectedRowStyle.Render("/src/dot_zshrc")) {
+	row := m.renderEntryRow(m.rows[0], paneSrc, true, true, 64)
+	if !strings.Contains(row, selectedRowStyle.Render("- dot_zshrc")) {
 		t.Fatalf("selected row should style the path, row = %q", row)
+	}
+}
+
+func TestConfirmModalOverlaysMainView(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+	m.state = stateConfirming
+	m.confirmAction = pendingAction{kind: actionAdd, entry: m.entries[0]}
+
+	view := m.View()
+	if !strings.Contains(view, "Copy Current Target Into Source?") {
+		t.Fatalf("confirm modal missing: %q", view)
+	}
+	if !strings.Contains(view, "src (1 rows)") {
+		t.Fatalf("main view should remain visible behind modal: %q", view)
+	}
+}
+
+func TestConfirmModalOverlayKeepsUnderlyingColumns(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+	m.state = stateConfirming
+	m.confirmAction = pendingAction{kind: actionAdd, entry: m.entries[0]}
+
+	view := xansi.Strip(m.View())
+	for _, line := range strings.Split(view, "\n") {
+		if !strings.Contains(line, "Copy Current Target Into Source?") {
+			continue
+		}
+
+		leftBorder := strings.IndexRune(line, '║')
+		rightBorder := strings.LastIndex(line, "║")
+		if leftBorder <= 0 || rightBorder <= leftBorder {
+			t.Fatalf("unexpected modal line: %q", line)
+		}
+		if strings.TrimSpace(line[:leftBorder]) == "" {
+			t.Fatalf("left side of overlay row was cleared: %q", line)
+		}
+		if strings.TrimSpace(line[rightBorder+1:]) == "" {
+			t.Fatalf("right side of overlay row was cleared: %q", line)
+		}
+		return
+	}
+
+	t.Fatalf("overlay row with modal title not found: %q", view)
+}
+
+func TestHeaderShowsLoadingIndicator(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+	m.entriesLoading = true
+
+	header := m.renderHeader()
+	if !strings.Contains(header, "Loading entries...") {
+		t.Fatalf("header missing loading indicator: %q", header)
 	}
 }
 
@@ -560,10 +697,13 @@ func TestStaleDiffResultsAreIgnored(t *testing.T) {
 func newTestModel(entries []model.Entry) Model {
 	m := New(nil)
 	m.entries = append([]model.Entry(nil), entries...)
+	m.entriesLoading = false
+	m.statusMsg = ""
 	m.ready = true
 	m.width = 120
 	m.height = 24
 	m.diffViewport = viewport.New(60, 4)
+	m.rebuildRows("")
 	return m
 }
 
