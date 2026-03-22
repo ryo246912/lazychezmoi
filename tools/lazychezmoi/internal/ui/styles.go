@@ -9,6 +9,7 @@ var (
 	colorRed      = lipgloss.Color("196")
 	colorYellow   = lipgloss.Color("220")
 	colorCyan     = lipgloss.Color("81")
+	colorBlue     = lipgloss.Color("75")
 	colorModalBg  = lipgloss.Color("236")
 
 	titleStyle = lipgloss.NewStyle().
@@ -43,6 +44,7 @@ var (
 	statusAddedStyle     = lipgloss.NewStyle().Foreground(colorGreen)
 	statusModStyle       = lipgloss.NewStyle().Foreground(colorYellow)
 	statusDeletedStyle   = lipgloss.NewStyle().Foreground(colorRed)
+	statusDirStyle       = lipgloss.NewStyle().Foreground(colorBlue).Bold(true)
 	statusUnmanagedStyle = lipgloss.NewStyle().
 				Foreground(colorCyan).
 				Bold(true)
@@ -87,4 +89,10 @@ var (
 				Foreground(lipgloss.Color("255")).
 				Background(lipgloss.Color("235")).
 				Padding(0, 1)
+
+	filterStyle = lipgloss.NewStyle().
+			Foreground(colorCyan).
+			Bold(true)
+
+	spinnerStyle = lipgloss.NewStyle().Foreground(colorCyan)
 )

@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -80,6 +82,14 @@ type actionErrMsg struct {
 
 type editorErrMsg struct{ err error }
 
+type diffRefreshDueMsg struct {
+	targetPath  string
+	token       int
+	resetScroll bool
+}
+
+const diffRefreshDelay = 180 * time.Millisecond
+
 func (m Model) loadEntriesCmd() tea.Cmd {
 	currentMode := m.listMode
 	chezmoi := m.chezmoi
@@ -109,6 +119,14 @@ func (m Model) loadEntriesCmd() tea.Cmd {
 			return entriesLoadedMsg{mode: currentMode, entries: entries}
 		}
 	}
+}
+
+func (m *Model) startEntriesReload(status string) tea.Cmd {
+	m.entriesLoading = true
+	if status != "" {
+		m.statusMsg = status
+	}
+	return tea.Batch(m.loadEntriesCmd(), m.spinner.Tick)
 }
 
 func (m Model) loadDiffCmd(
@@ -326,7 +344,7 @@ func (m Model) runActionCmd(action pendingAction) tea.Cmd {
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.loadEntriesCmd()
+	return tea.Batch(m.loadEntriesCmd(), m.spinner.Tick)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -352,18 +370,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.syncDiffPreview(false)
 
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		if m.isBusy() {
+			cmds = append(cmds, cmd)
+		}
+
 	case entriesLoadedMsg:
 		if msg.mode != m.listMode {
 			break
 		}
 
+		anchor := m.selectedRowKey()
+		m.entriesLoading = false
 		m.entryGeneration++
 		m.loadErr = nil
 		m.entries = m.hydrateEntries(msg.entries)
-		m.clampCursor()
+		m.dirChildren = make(map[string][]model.Entry)
+		m.expandedDirs = make(map[string]bool)
 		m.reconcileSelections()
 		m.pruneCaches()
 		m.invalidateDiffs()
+		m.rebuildRows(anchor)
 		m.syncDiffPreview(true)
 
 		cmds = append(cmds, m.loadSourcePathsCmd())
@@ -381,8 +410,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.mode != m.listMode {
 			break
 		}
+		m.entriesLoading = false
 		m.loadErr = msg.err
 		m.entries = nil
+		m.rows = nil
 		m.confirmAction = pendingAction{}
 		m.invalidateDiffs()
 		m.syncDiffPreview(true)
@@ -397,6 +428,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if index := m.entryIndex(msg.targetPath); index >= 0 {
 			m.entries[index].SourcePath = msg.path
 		}
+		m.rebuildRows(m.selectedRowKey())
 
 	case snapshotReadyMsg:
 		if msg.mode != m.applySourceMode || msg.requestID != m.snapshotRequestID {
@@ -423,6 +455,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshotErr = msg.err
 		m.statusMsg = fmt.Sprintf("Failed to prepare %s snapshot: %v", msg.mode, msg.err)
 		m.syncDiffPreview(true)
+
+	case diffRefreshDueMsg:
+		entry := m.selectedEntry()
+		if msg.token != m.pendingDiffSeq || entry == nil || entry.TargetPath != msg.targetPath || msg.targetPath != m.pendingDiffPath {
+			break
+		}
+		m.pendingDiffPath = ""
+		cmds = append(cmds, m.refreshSelectedDiffCmd(msg.resetScroll))
 
 	case diffLoadedMsg:
 		if !m.acceptDiffResult(msg.targetPath, msg.generation, msg.requestID) {
@@ -477,7 +517,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.statusMsg = actionSuccessMessage(msg.action, m.applySourceMode)
 		}
-		cmds = append(cmds, m.loadEntriesCmd())
+		cmds = append(cmds, m.startEntriesReload(""))
 
 	case actionErrMsg:
 		m.state = stateNormal
@@ -492,7 +532,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.invalidateSnapshot()
 		}
 		m.statusMsg = actionFailureMessage(msg, m.applySourceMode)
-		cmds = append(cmds, m.loadEntriesCmd())
+		cmds = append(cmds, m.startEntriesReload(""))
 
 	case editorErrMsg:
 		m.statusMsg = fmt.Sprintf("Editor error: %v", msg.err)
@@ -500,16 +540,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		switch m.state {
 		case stateNormal:
-			if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-				cmds = append(cmds, m.handleMouseClick(msg))
-				break
+			if msg.Action == tea.MouseActionPress {
+				switch msg.Button {
+				case tea.MouseButtonLeft:
+					cmds = append(cmds, m.handleMouseClick(msg))
+				case tea.MouseButtonWheelDown:
+					cmds = append(cmds, m.handleListWheel(msg.X, msg.Y, 1))
+				case tea.MouseButtonWheelUp:
+					cmds = append(cmds, m.handleListWheel(msg.X, msg.Y, -1))
+				}
 			}
 			if m.focusedPane == paneDiff {
 				var cmd tea.Cmd
 				m.diffViewport, cmd = m.diffViewport.Update(msg)
 				cmds = append(cmds, cmd)
 			}
-		case stateConfirming, stateCommandInput, stateHelp, stateRunningAction:
+		case stateConfirming, stateCommandInput, stateFilterInput, stateHelp, stateRunningAction:
 			// Ignore mouse input outside the main browsing state.
 		}
 
@@ -556,6 +602,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case stateFilterInput:
+			anchor := m.selectedRowKey()
+			changed := false
+			switch msg.String() {
+			case "esc":
+				m.filterInput = ""
+				m.filterQuery = ""
+				m.state = stateNormal
+				m.rebuildRows(anchor)
+				m.syncDiffPreview(true)
+				m.statusMsg = "Filter cleared"
+			case "enter":
+				m.filterQuery = strings.TrimSpace(m.filterInput)
+				m.state = stateNormal
+				m.rebuildRows(anchor)
+				m.statusMsg = "Filter updated"
+				if m.filterQuery == "" {
+					m.statusMsg = "Filter cleared"
+				}
+				cmds = append(cmds, m.refreshSelectedDiffCmd(true))
+			case "backspace", "ctrl+h":
+				if len(m.filterInput) > 0 {
+					m.filterInput = m.filterInput[:len(m.filterInput)-1]
+					changed = true
+				}
+			default:
+				if msg.Type == tea.KeyRunes {
+					m.filterInput += string(msg.Runes)
+					changed = true
+				}
+			}
+			if changed {
+				m.filterQuery = strings.TrimSpace(m.filterInput)
+				m.rebuildRows(anchor)
+				m.syncDiffPreview(true)
+			}
+
 		case stateConfirming:
 			switch msg.String() {
 			case "y", "Y":
@@ -573,7 +656,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.state = stateRunningAction
 				m.statusMsg = runningActionMessage(m.confirmAction, m.applySourceMode)
-				cmds = append(cmds, m.runActionCmd(m.confirmAction))
+				cmds = append(cmds, m.runActionCmd(m.confirmAction), m.spinner.Tick)
 			case "n", "N", "esc":
 				m.state = stateNormal
 				m.confirmAction = pendingAction{}
@@ -591,13 +674,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "?":
 				m.state = stateHelp
 
+			case "/":
+				m.state = stateFilterInput
+				m.resetFilterInput()
+				m.statusMsg = ""
+
 			case "r":
-				m.statusMsg = "Refreshing..."
 				m.invalidateDiffs()
 				if m.applySourceMode.RequiresSnapshot() {
 					m.invalidateSnapshot()
 				}
-				cmds = append(cmds, m.loadEntriesCmd())
+				cmds = append(cmds, m.startEntriesReload("Refreshing entries..."))
 
 			case "m":
 				if m.listMode == listModeManaged {
@@ -605,9 +692,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.listMode = listModeManaged
 				}
-				m.statusMsg = fmt.Sprintf("Switched to %s mode", m.listMode)
 				m.invalidateDiffs()
-				cmds = append(cmds, m.loadEntriesCmd())
+				m.dirChildren = make(map[string][]model.Entry)
+				m.expandedDirs = make(map[string]bool)
+				cmds = append(cmds, m.startEntriesReload(fmt.Sprintf("Switching to %s mode...", m.listMode)))
 
 			case "1", "2", "3":
 				mode, ok := applySourceModeFromKey(msg.String())
@@ -624,10 +712,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.queueInitialDiffLoadsCmd())
 				}
 
-			case "tab":
-				m.toggleDiffPaneFocus()
-
-			case "shift+tab":
+			case "tab", "shift+tab":
 				m.toggleDiffPaneFocus()
 
 			case "h":
@@ -640,6 +725,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.setFocusedPane(paneTarget)
 				}
 
+			case "enter":
+				if m.focusedPane == paneDiff {
+					break
+				}
+				row := m.selectedRow()
+				if row == nil || !row.directory {
+					break
+				}
+				if err := m.toggleDirectory(*row); err != nil {
+					m.statusMsg = err.Error()
+					break
+				}
+				m.rebuildRows(row.key)
+				m.syncDiffPreview(true)
+
 			case "j", "down":
 				if m.focusedPane == paneDiff {
 					var cmd tea.Cmd
@@ -647,9 +747,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, cmd)
 					break
 				}
-				if m.cursor < len(m.entries)-1 {
+				if m.cursor < len(m.rows)-1 {
 					m.cursor++
-					cmds = append(cmds, m.refreshSelectedDiffCmd(true))
+					cmds = append(cmds, m.scheduleSelectedDiffCmd(true))
 				}
 
 			case "k", "up":
@@ -661,7 +761,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if m.cursor > 0 {
 					m.cursor--
-					cmds = append(cmds, m.refreshSelectedDiffCmd(true))
+					cmds = append(cmds, m.scheduleSelectedDiffCmd(true))
 				}
 
 			case " ", "space":
@@ -780,12 +880,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) clampCursor() {
 	switch {
-	case len(m.entries) == 0:
+	case len(m.rows) == 0:
 		m.cursor = 0
 	case m.cursor < 0:
 		m.cursor = 0
-	case m.cursor >= len(m.entries):
-		m.cursor = len(m.entries) - 1
+	case m.cursor >= len(m.rows):
+		m.cursor = len(m.rows) - 1
 	}
 }
 
@@ -804,9 +904,10 @@ func (m Model) hydrateEntries(entries []model.Entry) []model.Entry {
 }
 
 func (m *Model) pruneCaches() {
-	currentTargets := make(map[string]struct{}, len(m.entries))
-	for _, entry := range m.entries {
-		currentTargets[entry.TargetPath] = struct{}{}
+	targetPaths := m.allTargetPaths()
+	currentTargets := make(map[string]struct{}, len(targetPaths))
+	for _, targetPath := range targetPaths {
+		currentTargets[targetPath] = struct{}{}
 	}
 	for targetPath := range m.sourcePathCache {
 		if _, ok := currentTargets[targetPath]; !ok {
@@ -835,7 +936,7 @@ func (m *Model) startSnapshotPreparation() tea.Cmd {
 	m.snapshotLoading = true
 	m.snapshotErr = nil
 	m.snapshotRequestID++
-	return m.prepareSnapshotCmd(m.applySourceMode, m.snapshotRequestID)
+	return tea.Batch(m.prepareSnapshotCmd(m.applySourceMode, m.snapshotRequestID), m.spinner.Tick)
 }
 
 func (m *Model) requestDiffLoadCmd(targetPath string) tea.Cmd {
@@ -861,15 +962,10 @@ func (m *Model) requestDiffLoadCmd(targetPath string) tea.Cmd {
 }
 
 func (m *Model) refreshSelectedDiffCmd(resetScroll bool) tea.Cmd {
+	m.pendingDiffPath = ""
 	entry := m.selectedEntry()
 	if entry == nil {
-		m.diffContent = ""
-		m.diffErr = nil
-		m.diffLoading = false
-		m.diffViewport.SetContent("")
-		if resetScroll {
-			m.diffViewport.GotoTop()
-		}
+		m.syncDiffPreview(resetScroll)
 		return nil
 	}
 
@@ -883,22 +979,46 @@ func (m *Model) refreshSelectedDiffCmd(resetScroll bool) tea.Cmd {
 	return cmd
 }
 
-func (m *Model) queueInitialDiffLoadsCmd() tea.Cmd {
+func (m *Model) scheduleSelectedDiffCmd(resetScroll bool) tea.Cmd {
 	entry := m.selectedEntry()
 	if entry == nil {
+		m.pendingDiffPath = ""
+		m.syncDiffPreview(resetScroll)
 		return nil
 	}
 	if entry.Kind == model.EntryManaged && m.applySourceMode.RequiresSnapshot() && m.snapshotSource == "" {
+		m.pendingDiffPath = ""
+		m.syncDiffPreview(resetScroll)
 		return nil
 	}
 
-	priority := m.requestDiffLoadCmd(entry.TargetPath)
-	var background []tea.Cmd
-	for _, current := range m.entries {
-		if current.TargetPath == entry.TargetPath {
-			continue
+	m.pendingDiffSeq++
+	m.pendingDiffPath = entry.TargetPath
+	if _, ok := m.diffCache[entry.TargetPath]; ok {
+		m.syncDiffPreview(resetScroll)
+	}
+
+	token := m.pendingDiffSeq
+	targetPath := entry.TargetPath
+	return tea.Tick(diffRefreshDelay, func(time.Time) tea.Msg {
+		return diffRefreshDueMsg{
+			targetPath:  targetPath,
+			token:       token,
+			resetScroll: resetScroll,
 		}
-		background = append(background, m.requestDiffLoadCmd(current.TargetPath))
+	})
+}
+
+func (m *Model) queueInitialDiffLoadsCmd() tea.Cmd {
+	targets := m.prefetchDiffTargets(6)
+	if len(targets) == 0 {
+		return nil
+	}
+
+	priority := m.requestDiffLoadCmd(targets[0])
+	var background []tea.Cmd
+	for _, targetPath := range targets[1:] {
+		background = append(background, m.requestDiffLoadCmd(targetPath))
 	}
 	if len(background) == 0 {
 		return priority
@@ -906,12 +1026,55 @@ func (m *Model) queueInitialDiffLoadsCmd() tea.Cmd {
 	return tea.Sequence(priority, tea.Batch(background...))
 }
 
+func (m Model) prefetchDiffTargets(limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, limit)
+	targets := make([]string, 0, limit)
+	for step := 0; len(targets) < limit && (m.cursor-step >= 0 || m.cursor+step < len(m.rows)); step++ {
+		for _, index := range []int{m.cursor - step, m.cursor + step} {
+			if index < 0 || index >= len(m.rows) {
+				continue
+			}
+			row := m.rows[index]
+			if !row.hasEntry {
+				continue
+			}
+			if _, ok := seen[row.entry.TargetPath]; ok {
+				continue
+			}
+			seen[row.entry.TargetPath] = struct{}{}
+			targets = append(targets, row.entry.TargetPath)
+			if len(targets) >= limit {
+				break
+			}
+		}
+	}
+	return targets
+}
+
 func (m *Model) syncDiffPreview(resetScroll bool) {
 	m.diffContent = ""
 	m.diffErr = nil
 	m.diffLoading = false
 
-	if entry := m.selectedEntry(); entry != nil {
+	if row := m.selectedRow(); row == nil {
+		m.diffViewport.SetContent("")
+		if resetScroll {
+			m.diffViewport.GotoTop()
+		}
+		return
+	} else if !row.hasEntry {
+		lines := []string{
+			fmt.Sprintf("Directory: %s", row.targetPath),
+			"",
+			"Press Enter to expand or collapse this node.",
+			"Select a file row to preview a diff.",
+		}
+		m.diffContent = strings.Join(lines, "\n")
+	} else if entry := m.selectedEntry(); entry != nil {
 		if state, ok := m.diffCache[entry.TargetPath]; ok {
 			m.diffContent = state.content
 			m.diffLoading = state.loading
@@ -956,13 +1119,43 @@ func (m *Model) handleMouseClick(msg tea.MouseMsg) tea.Cmd {
 }
 
 func (m *Model) selectListRow(rect paneRect, kind paneKind, x, y int) tea.Cmd {
-	row, ok := m.listPaneMetrics(kind, rect).rowIndex(x, y, len(m.entries))
+	row, ok := m.listPaneMetrics(kind, rect).rowIndex(x, y, len(m.rows))
 	if !ok || row == m.cursor {
 		return nil
 	}
 
 	m.cursor = row
 	return m.refreshSelectedDiffCmd(true)
+}
+
+func (m *Model) handleListWheel(x, y, delta int) tea.Cmd {
+	if !m.ready || delta == 0 || len(m.rows) == 0 {
+		return nil
+	}
+
+	layout := m.layout()
+	switch {
+	case layout.src.contains(x, y):
+		m.setFocusedPane(paneSrc)
+	case layout.target.contains(x, y):
+		m.setFocusedPane(paneTarget)
+	default:
+		return nil
+	}
+
+	next := m.cursor + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(m.rows) {
+		next = len(m.rows) - 1
+	}
+	if next == m.cursor {
+		return nil
+	}
+
+	m.cursor = next
+	return m.scheduleSelectedDiffCmd(false)
 }
 
 func openEditorCmd(path string) tea.Cmd {

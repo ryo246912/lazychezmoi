@@ -4,14 +4,16 @@ A terminal UI for [chezmoi](https://www.chezmoi.io/) inspired by lazygit/gitui.
 
 ## Features
 
-- Browse changed dotfiles with a split-pane TUI
+- Browse changed dotfiles with a split-pane, tree-based TUI
 - Toggle between managed changes and unmanaged target-only entries
-- Preview diffs inline with background caching and refresh
+- Filter the file tree with `/`, click or wheel-scroll to focus a row, and expand directories with `Enter`
+- Preview diffs inline with debounced refresh and background caching
 - Apply one or many target files from `working tree`, `staged`, or `HEAD`
 - Run `chezmoi add` for unmanaged targets or import target-side changes from managed targets back into source state
 - Delete unmanaged targets from the target tree
 - Run a custom shell command with the selected entry exported as `LAZYCHEZMOI_*` environment variables
 - Open the focused source or target file in your `$EDITOR`
+- Show loading spinners for apply, mode switches, and snapshot preparation
 - Refresh the file list at any time
 
 ## Installation
@@ -62,7 +64,7 @@ by the current Go standard library advisory fixed after Go 1.25.5.
 ### Modes
 
 - `managed`: files already tracked by chezmoi where the target tree currently differs from source state
-- `unmanaged`: target-only paths that are not yet tracked in chezmoi source state
+- `all`: managed diffs plus target-only paths that are not yet tracked in chezmoi source state
 
 ### Keybindings
 
@@ -70,17 +72,19 @@ by the current Go standard library advisory fixed after Go 1.25.5.
 |-----|--------|
 | `j` / `↓` | Move down |
 | `k` / `↑` | Move up |
+| `enter` | Expand or collapse the selected directory |
+| `/` | Start filter input for the file tree |
 | `h` / `l` | Focus `src` / `target` pane |
 | `tab` | Toggle diff focus |
-| `m` | Toggle `managed` / `unmanaged` mode |
+| `m` | Toggle `managed` / `all` mode |
 | `1` / `2` / `3` | Select apply source: `working tree` / `staged` / `HEAD` |
 | `space` | Toggle the current target in the apply queue (`managed` mode) |
 | `a` | Apply queued targets, or the current target if nothing is queued (`managed` mode) |
-| `i` | Run `chezmoi add` for the selected target: update source from target (`managed`) or start tracking the target (`unmanaged`) |
-| `d` | Delete the current unmanaged target after confirmation (`unmanaged` mode) |
+| `i` | Run `chezmoi add` for the selected target: update source from target (`managed`) or start tracking the target (`all`) |
+| `d` | Delete the current unmanaged target after confirmation (`all` mode) |
 | `!` | Enter a custom shell command for the selected entry |
 | `e` | Open the focused `src` or `target` file in `$EDITOR` |
-| Mouse click | Focus the clicked pane; clicking a `src` / `target` row also selects it |
+| Mouse click / wheel | Focus the clicked pane; clicking or scrolling a `src` / `target` row also selects it |
 | `pgup` / `pgdn` / `g` / `G` | Scroll the focused diff |
 | `r` | Refresh file list |
 | `?` | Toggle help |
