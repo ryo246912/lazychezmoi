@@ -33,9 +33,9 @@ func (m Model) View() string {
 	body := m.renderMain(contentH)
 	switch m.state {
 	case stateConfirming:
-		body = overlayCenteredBody(body, m.renderConfirmModal(), m.width, contentH)
+		body = centeredModalBody(m.renderConfirmModal(), m.width, contentH)
 	case stateCommandInput:
-		body = overlayCenteredBody(body, m.renderCommandInputModal(), m.width, contentH)
+		body = centeredModalBody(m.renderCommandInputModal(), m.width, contentH)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
@@ -448,6 +448,20 @@ func overlayCenteredBody(body, modal string, width, height int) string {
 	}
 
 	return strings.Join(baseLines, "\n")
+}
+
+func centeredModalBody(modal string, width, height int) string {
+	if height <= 0 {
+		return ""
+	}
+
+	blankLine := strings.Repeat(" ", max(0, width))
+	lines := make([]string, height)
+	for i := range lines {
+		lines[i] = blankLine
+	}
+
+	return overlayCenteredBody(strings.Join(lines, "\n"), modal, width, height)
 }
 
 func overlayLine(base, overlay string, width, left, overlayWidth int) string {
