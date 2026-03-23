@@ -85,10 +85,36 @@ var (
 			Background(lipgloss.Color("235")).
 			Padding(0, 1)
 
-	commandInputStyle = lipgloss.NewStyle().
+	commandInputBoxStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("255")).
 				Background(lipgloss.Color("235")).
 				Padding(0, 1)
+
+	commandInputPromptStyle = lipgloss.NewStyle().
+				Foreground(colorCyan).
+				Bold(true)
+
+	commandInputTextStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255"))
+
+	commandInputPlaceholderStyle = lipgloss.NewStyle().
+					Foreground(colorInactive)
+
+	commandInputCursorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255")).
+				Background(colorCyan)
+
+	commandHistoryBoxStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252")).
+				Background(lipgloss.Color("235")).
+				Padding(0, 1)
+
+	commandHistoryStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252"))
+
+	commandHistorySelectedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("255")).
+					Background(colorFocus)
 
 	filterStyle = lipgloss.NewStyle().
 			Foreground(colorCyan).

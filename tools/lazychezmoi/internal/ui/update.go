@@ -248,7 +248,7 @@ func (m Model) prepareSnapshotCmd(mode gitmode.SourceMode, requestID int) tea.Cm
 
 func (m Model) runActionCmd(action pendingAction) tea.Cmd {
 	if action.kind == actionShell {
-		return runShellCommandCmd(action.command, m.shellEnv(action.entry), action)
+		return m.runShell(action.command, m.shellEnv(action.entry), action)
 	}
 
 	mode := m.applySourceMode
@@ -534,6 +534,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case editorErrMsg:
 		m.statusMsg = fmt.Sprintf("Editor error: %v", msg.err)
 
+	default:
+		if m.state == stateCommandInput {
+			var cmd tea.Cmd
+			prevValue := m.commandInput.Value()
+			m.commandInput, cmd = m.commandInput.Update(msg)
+			if m.commandHistoryIndex >= 0 && m.commandInput.Value() != prevValue {
+				m.commandHistoryIndex = -1
+				m.commandInputDraft = ""
+			}
+			cmds = append(cmds, cmd)
+		}
+
 	case tea.MouseMsg:
 		switch m.state {
 		case stateNormal:
@@ -570,36 +582,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc":
 				m.state = stateNormal
+				m.commandInput.Blur()
 				m.resetCommandInput()
 				m.statusMsg = "Cancelled"
 			case "enter":
-				command := strings.TrimSpace(m.commandInput)
+				command := strings.TrimSpace(m.commandInput.Value())
 				if command == "" {
 					m.state = stateNormal
+					m.commandInput.Blur()
+					m.resetCommandInput()
 					m.statusMsg = "Cancelled"
 					break
 				}
 				entry := m.selectedEntry()
 				if entry == nil {
 					m.state = stateNormal
+					m.commandInput.Blur()
+					m.resetCommandInput()
 					m.statusMsg = "No entry selected"
 					break
 				}
-				m.confirmAction = pendingAction{
+				action := pendingAction{
 					kind:    actionShell,
 					entry:   *entry,
 					command: command,
 				}
-				m.state = stateConfirming
-				m.statusMsg = ""
-			case "backspace", "ctrl+h":
-				if len(m.commandInput) > 0 {
-					m.commandInput = m.commandInput[:len(m.commandInput)-1]
-				}
+				action.warning = m.recordCommandHistory(command)
+				m.state = stateRunningAction
+				m.commandInput.Blur()
+				m.resetCommandInput()
+				m.statusMsg = runningActionMessage(action, m.applySourceMode)
+				cmds = append(cmds, m.runActionCmd(action), m.spinner.Tick)
+			case "down":
+				m.selectOlderCommandHistory()
+			case "up":
+				m.selectNewerCommandHistory()
 			default:
-				if msg.Type == tea.KeyRunes {
-					m.commandInput += string(msg.Runes)
+				prevValue := m.commandInput.Value()
+				var cmd tea.Cmd
+				m.commandInput, cmd = m.commandInput.Update(msg)
+				if m.commandHistoryIndex >= 0 && m.commandInput.Value() != prevValue {
+					m.commandHistoryIndex = -1
+					m.commandInputDraft = ""
 				}
+				cmds = append(cmds, cmd)
 			}
 
 		case stateFilterInput:
@@ -831,7 +857,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateConfirming
 				m.statusMsg = ""
 
-			case "!":
+			case ":":
 				entry := m.selectedEntry()
 				if entry == nil {
 					break
@@ -839,6 +865,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateCommandInput
 				m.resetCommandInput()
 				m.statusMsg = ""
+				cmds = append(cmds, m.commandInput.Focus())
 
 			case "e":
 				entry := m.selectedEntry()
@@ -1188,6 +1215,49 @@ func runShellCommandCmd(command string, env []string, action pendingAction) tea.
 	})
 }
 
+func (m *Model) recordCommandHistory(command string) string {
+	m.commandHistory = prependCommandHistory(command, m.commandHistory)
+	if m.commandStore == nil {
+		return ""
+	}
+	if err := m.commandStore.Save(m.commandHistory); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+func (m *Model) selectOlderCommandHistory() {
+	if len(m.commandHistory) == 0 {
+		return
+	}
+
+	if m.commandHistoryIndex == -1 {
+		m.commandInputDraft = m.commandInput.Value()
+		m.commandHistoryIndex = 0
+	} else if m.commandHistoryIndex < len(m.commandHistory)-1 {
+		m.commandHistoryIndex++
+	}
+
+	m.commandInput.SetValue(m.commandHistory[m.commandHistoryIndex])
+	m.commandInput.CursorEnd()
+}
+
+func (m *Model) selectNewerCommandHistory() {
+	if m.commandHistoryIndex == -1 {
+		return
+	}
+
+	if m.commandHistoryIndex == 0 {
+		m.commandHistoryIndex = -1
+		m.commandInput.SetValue(m.commandInputDraft)
+	} else {
+		m.commandHistoryIndex--
+		m.commandInput.SetValue(m.commandHistory[m.commandHistoryIndex])
+	}
+
+	m.commandInput.CursorEnd()
+}
+
 func buildUnmanagedDiff(entry model.Entry) (string, error) {
 	content, label, err := unmanagedPreview(entry)
 	if err != nil {
@@ -1267,33 +1337,38 @@ func runningActionMessage(action pendingAction, mode gitmode.SourceMode) string 
 }
 
 func actionSuccessMessage(action pendingAction, mode gitmode.SourceMode) string {
+	message := ""
 	switch action.kind {
 	case actionApply:
-		return fmt.Sprintf("Applied %d file(s) from %s", len(action.targets), mode)
+		message = fmt.Sprintf("Applied %d file(s) from %s", len(action.targets), mode)
 	case actionAdd:
 		if action.entry.Kind == model.EntryManaged {
-			return fmt.Sprintf("Updated source state from %s", action.entry.TargetPath)
+			message = fmt.Sprintf("Updated source state from %s", action.entry.TargetPath)
+			break
 		}
-		return fmt.Sprintf("Added %s to source state", action.entry.TargetPath)
+		message = fmt.Sprintf("Added %s to source state", action.entry.TargetPath)
 	case actionDelete:
-		return fmt.Sprintf("Deleted %s", action.entry.TargetPath)
+		message = fmt.Sprintf("Deleted %s", action.entry.TargetPath)
 	case actionShell:
-		return fmt.Sprintf("Command finished: %s", action.command)
+		message = fmt.Sprintf("Command finished: %s", action.command)
 	case actionPatchSource:
-		return fmt.Sprintf("Patched template source %s", action.entry.SourcePath)
+		message = fmt.Sprintf("Patched template source %s", action.entry.SourcePath)
 	case actionPatchSourceConfirm:
-		return fmt.Sprintf("Patched template source %s", action.entry.SourcePath)
+		message = fmt.Sprintf("Patched template source %s", action.entry.SourcePath)
 	default:
-		return "Done"
+		message = "Done"
 	}
+
+	return actionMessageWithWarning(message, action)
 }
 
 func actionFailureMessage(msg actionErrMsg, mode gitmode.SourceMode) string {
+	message := ""
 	switch msg.action.kind {
 	case actionApply:
 		switch {
 		case msg.completed > 0:
-			return fmt.Sprintf(
+			message = fmt.Sprintf(
 				"Applied %d file(s) from %s before failing on %s: %v",
 				msg.completed,
 				mode,
@@ -1301,24 +1376,34 @@ func actionFailureMessage(msg actionErrMsg, mode gitmode.SourceMode) string {
 				msg.err,
 			)
 		case msg.failedTarget != "":
-			return fmt.Sprintf("Failed to apply %s from %s: %v", msg.failedTarget, mode, msg.err)
+			message = fmt.Sprintf("Failed to apply %s from %s: %v", msg.failedTarget, mode, msg.err)
 		default:
-			return fmt.Sprintf("Failed to apply from %s: %v", mode, msg.err)
+			message = fmt.Sprintf("Failed to apply from %s: %v", mode, msg.err)
 		}
 	case actionAdd:
 		if msg.action.entry.Kind == model.EntryManaged {
-			return fmt.Sprintf("Failed to update source state from %s: %v", msg.failedTarget, msg.err)
+			message = fmt.Sprintf("Failed to update source state from %s: %v", msg.failedTarget, msg.err)
+			break
 		}
-		return fmt.Sprintf("Failed to add %s: %v", msg.failedTarget, msg.err)
+		message = fmt.Sprintf("Failed to add %s: %v", msg.failedTarget, msg.err)
 	case actionDelete:
-		return fmt.Sprintf("Failed to delete %s: %v", msg.failedTarget, msg.err)
+		message = fmt.Sprintf("Failed to delete %s: %v", msg.failedTarget, msg.err)
 	case actionShell:
-		return fmt.Sprintf("Shell command failed: %v", msg.err)
+		message = fmt.Sprintf("Shell command failed: %v", msg.err)
 	case actionPatchSource, actionPatchSourceConfirm:
-		return fmt.Sprintf("Failed to patch template source %s: %v", msg.failedTarget, msg.err)
+		message = fmt.Sprintf("Failed to patch template source %s: %v", msg.failedTarget, msg.err)
 	default:
-		return fmt.Sprintf("Command failed: %v", msg.err)
+		message = fmt.Sprintf("Command failed: %v", msg.err)
 	}
+
+	return actionMessageWithWarning(message, msg.action)
+}
+
+func actionMessageWithWarning(message string, action pendingAction) string {
+	if action.warning == "" {
+		return message
+	}
+	return fmt.Sprintf("%s (history warning: %s)", message, action.warning)
 }
 
 func colorizeDiff(content string) string {

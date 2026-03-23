@@ -363,30 +363,176 @@ func TestPartialApplyFailureRemovesCompletedTargetsImmediately(t *testing.T) {
 	}
 }
 
-func TestCommandPromptCreatesShellConfirmation(t *testing.T) {
+func TestColonOpensCommandPrompt(t *testing.T) {
 	m := newTestModel([]model.Entry{
 		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
 	})
 
-	next, _ := m.Update(keyRunes("!"))
+	next, _ := m.Update(keyRunes(":"))
 	m = next.(Model)
 	if m.state != stateCommandInput {
 		t.Fatalf("state = %v, want command input", m.state)
 	}
+	if footer := m.renderFooter(); !strings.Contains(footer, "down/up:history") {
+		t.Fatalf("footer missing history hint: %q", footer)
+	}
+	modal := xansi.Strip(m.renderCommandInputModal())
+	if strings.Contains(modal, "Selected target:") {
+		t.Fatalf("command prompt should not show selected target: %q", modal)
+	}
+	if strings.Contains(modal, "The command runs in your shell") {
+		t.Fatalf("command prompt should not show shell help text: %q", modal)
+	}
+}
 
+func TestCommandPromptRunsShellImmediately(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+	store := &fakeCommandHistoryStore{}
+	m.commandStore = store
+
+	var capturedCommand string
+	var capturedEnv []string
+	m.runShell = func(command string, env []string, action pendingAction) tea.Cmd {
+		capturedCommand = command
+		capturedEnv = append([]string(nil), env...)
+		return nil
+	}
+
+	next, _ := m.Update(keyRunes(":"))
+	m = next.(Model)
 	next, _ = m.Update(keyRunes("echo ok"))
 	m = next.(Model)
 	next, _ = m.Update(keyEnter())
 	m = next.(Model)
 
-	if m.state != stateConfirming {
-		t.Fatalf("state = %v, want confirming", m.state)
+	if m.state != stateRunningAction {
+		t.Fatalf("state = %v, want running action", m.state)
 	}
-	if m.confirmAction.kind != actionShell {
-		t.Fatalf("action kind = %v, want shell", m.confirmAction.kind)
+	if capturedCommand != "echo ok" {
+		t.Fatalf("captured command = %q, want echo ok", capturedCommand)
 	}
-	if m.confirmAction.command != "echo ok" {
-		t.Fatalf("command = %q, want echo ok", m.confirmAction.command)
+	if len(capturedEnv) == 0 {
+		t.Fatalf("expected shell env to be passed")
+	}
+	if m.commandHistory[0] != "echo ok" {
+		t.Fatalf("history = %v, want echo ok first", m.commandHistory)
+	}
+	if len(store.saved) == 0 || store.saved[0] != "echo ok" {
+		t.Fatalf("saved history = %v, want echo ok first", store.saved)
+	}
+	if strings.Contains(m.renderFooter(), "y:confirm") {
+		t.Fatalf("command prompt should not enter confirmation flow")
+	}
+}
+
+func TestCommandPromptHistoryNavigation(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+	m.commandHistory = []string{"echo ok", "pwd"}
+
+	next, _ := m.Update(keyRunes(":"))
+	m = next.(Model)
+	next, _ = m.Update(keyRunes("ls"))
+	m = next.(Model)
+
+	next, _ = m.Update(keyDown())
+	m = next.(Model)
+	if got := m.commandInput.Value(); got != "echo ok" {
+		t.Fatalf("value after first down = %q, want echo ok", got)
+	}
+
+	next, _ = m.Update(keyDown())
+	m = next.(Model)
+	if got := m.commandInput.Value(); got != "pwd" {
+		t.Fatalf("value after second down = %q, want pwd", got)
+	}
+
+	next, _ = m.Update(keyUp())
+	m = next.(Model)
+	if got := m.commandInput.Value(); got != "echo ok" {
+		t.Fatalf("value after first up = %q, want echo ok", got)
+	}
+
+	next, _ = m.Update(keyUp())
+	m = next.(Model)
+	if got := m.commandInput.Value(); got != "ls" {
+		t.Fatalf("value after restoring draft via up = %q, want ls", got)
+	}
+}
+
+func TestCommandPromptEmptyEnterCancels(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+
+	var ran bool
+	m.runShell = func(command string, env []string, action pendingAction) tea.Cmd {
+		ran = true
+		return nil
+	}
+
+	next, _ := m.Update(keyRunes(":"))
+	m = next.(Model)
+	next, _ = m.Update(keyEnter())
+	m = next.(Model)
+
+	if m.state != stateNormal {
+		t.Fatalf("state = %v, want normal", m.state)
+	}
+	if ran {
+		t.Fatalf("empty enter should not run shell")
+	}
+	if m.statusMsg != "Cancelled" {
+		t.Fatalf("status = %q, want Cancelled", m.statusMsg)
+	}
+}
+
+func TestCommandPromptSaveFailureWarnsAfterSuccess(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+	store := &fakeCommandHistoryStore{saveErr: fmt.Errorf("save failed")}
+	m.commandStore = store
+
+	var capturedAction pendingAction
+	m.runShell = func(command string, env []string, action pendingAction) tea.Cmd {
+		capturedAction = action
+		return nil
+	}
+
+	next, _ := m.Update(keyRunes(":"))
+	m = next.(Model)
+	next, _ = m.Update(keyRunes("pwd"))
+	m = next.(Model)
+	next, _ = m.Update(keyEnter())
+	m = next.(Model)
+
+	if capturedAction.warning == "" {
+		t.Fatalf("expected warning on captured action")
+	}
+
+	next, _ = m.Update(actionDoneMsg{action: capturedAction})
+	m = next.(Model)
+	if !strings.Contains(m.statusMsg, "history warning") {
+		t.Fatalf("status = %q, want history warning", m.statusMsg)
+	}
+}
+
+func TestCommandHistoryLoadFailureDoesNotBreakModel(t *testing.T) {
+	store := &fakeCommandHistoryStore{loadErr: fmt.Errorf("broken history")}
+	m := newModel(nil, store)
+
+	if m.state != stateNormal {
+		t.Fatalf("state = %v, want normal", m.state)
+	}
+	if len(m.commandHistory) != 0 {
+		t.Fatalf("history = %v, want empty history on load failure", m.commandHistory)
+	}
+	if m.commandStore != store {
+		t.Fatalf("store = %#v, want injected store", m.commandStore)
 	}
 }
 
@@ -695,7 +841,7 @@ func TestStaleDiffResultsAreIgnored(t *testing.T) {
 }
 
 func newTestModel(entries []model.Entry) Model {
-	m := New(nil)
+	m := newModel(nil, &fakeCommandHistoryStore{})
 	m.entries = append([]model.Entry(nil), entries...)
 	m.entriesLoading = false
 	m.statusMsg = ""
@@ -719,6 +865,10 @@ func keyDown() tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyDown}
 }
 
+func keyUp() tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyUp}
+}
+
 func keyTab() tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyTab}
 }
@@ -735,4 +885,23 @@ func mouseLeftPress(x, y int) tea.MouseMsg {
 		Action: tea.MouseActionPress,
 		Type:   tea.MouseLeft,
 	}
+}
+
+type fakeCommandHistoryStore struct {
+	loaded  []string
+	saved   []string
+	loadErr error
+	saveErr error
+}
+
+func (s *fakeCommandHistoryStore) Load() ([]string, error) {
+	return append([]string(nil), s.loaded...), s.loadErr
+}
+
+func (s *fakeCommandHistoryStore) Save(history []string) error {
+	s.saved = append([]string(nil), history...)
+	if s.saveErr != nil {
+		return s.saveErr
+	}
+	return nil
 }

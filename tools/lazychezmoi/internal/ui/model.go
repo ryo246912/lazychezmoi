@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -94,6 +95,7 @@ type pendingAction struct {
 	targets     []string
 	entry       model.Entry
 	command     string
+	warning     string
 	patchResult []byte // pre-computed result for actionPatchSourceConfirm
 }
 
@@ -145,10 +147,14 @@ type Model struct {
 	diffLoading  bool
 	diffErr      error
 
-	commandInput   string
-	filterQuery    string
-	filterInput    string
-	entriesLoading bool
+	commandInput        textinput.Model
+	commandHistory      []string
+	commandHistoryIndex int
+	commandInputDraft   string
+	commandStore        commandHistoryStore
+	filterQuery         string
+	filterInput         string
+	entriesLoading      bool
 
 	width  int
 	height int
@@ -159,28 +165,43 @@ type Model struct {
 	statusMsg  string
 	loadErr    error
 	openEditor func(string) tea.Cmd
+	runShell   shellCommandRunner
 }
 
 func New(client *chezmoi.Client) Model {
+	return newModel(client, newDefaultCommandHistoryStore())
+}
+
+func newModel(client *chezmoi.Client, commandStore commandHistoryStore) Model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Line
 	spin.Style = spinnerStyle
 
+	commandHistory, err := commandStore.Load()
+	if err != nil {
+		commandHistory = nil
+	}
+
 	return Model{
-		chezmoi:         client,
-		focusedPane:     paneTarget,
-		lastListPane:    paneTarget,
-		listMode:        listModeManaged,
-		applySourceMode: gitmode.SourceModeWorkingTree,
-		selectedTargets: make(map[string]struct{}),
-		sourcePathCache: make(map[string]string),
-		diffCache:       make(map[string]diffState),
-		expandedDirs:    make(map[string]bool),
-		dirChildren:     make(map[string][]model.Entry),
-		entriesLoading:  true,
-		spinner:         spin,
-		openEditor:      openEditorCmd,
-		statusMsg:       "Loading entries...",
+		chezmoi:             client,
+		focusedPane:         paneTarget,
+		lastListPane:        paneTarget,
+		listMode:            listModeManaged,
+		applySourceMode:     gitmode.SourceModeWorkingTree,
+		selectedTargets:     make(map[string]struct{}),
+		sourcePathCache:     make(map[string]string),
+		diffCache:           make(map[string]diffState),
+		expandedDirs:        make(map[string]bool),
+		dirChildren:         make(map[string][]model.Entry),
+		entriesLoading:      true,
+		spinner:             spin,
+		commandInput:        newCommandInputModel(),
+		commandHistory:      commandHistory,
+		commandHistoryIndex: -1,
+		commandStore:        commandStore,
+		openEditor:          openEditorCmd,
+		runShell:            runShellCommandCmd,
+		statusMsg:           "Loading entries...",
 	}
 }
 
@@ -516,7 +537,9 @@ func (m Model) currentApplyTargets() []string {
 }
 
 func (m *Model) resetCommandInput() {
-	m.commandInput = ""
+	m.commandInput.Reset()
+	m.commandHistoryIndex = -1
+	m.commandInputDraft = ""
 }
 
 func (m *Model) resetFilterInput() {
@@ -584,6 +607,17 @@ func (m Model) shellEnv(entry model.Entry) []string {
 		fmt.Sprintf("LAZYCHEZMOI_APPLY_SOURCE=%s", m.applySourceMode.String()),
 		fmt.Sprintf("LAZYCHEZMOI_LIST_MODE=%s", m.listMode.String()),
 	}
+}
+
+func newCommandInputModel() textinput.Model {
+	input := textinput.New()
+	input.Prompt = ": "
+	input.Placeholder = "Run a shell command"
+	input.PromptStyle = commandInputPromptStyle
+	input.TextStyle = commandInputTextStyle
+	input.PlaceholderStyle = commandInputPlaceholderStyle
+	input.Cursor.Style = commandInputCursorStyle
+	return input
 }
 
 func applySourceModeFromKey(key string) (gitmode.SourceMode, bool) {

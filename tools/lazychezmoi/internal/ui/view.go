@@ -92,7 +92,7 @@ func (m Model) renderFooter() string {
 	case stateConfirming:
 		lines = append(lines, "y:confirm  n/esc:cancel")
 	case stateCommandInput:
-		lines = append(lines, "enter:confirm  esc:cancel")
+		lines = append(lines, "enter:run  down/up:history  esc:cancel")
 	case stateFilterInput:
 		lines = append(lines, filterStyle.Render("/"+m.filterInput))
 		lines = append(lines, "enter:apply  esc:clear")
@@ -110,14 +110,14 @@ func (m Model) renderFooter() string {
 func (m Model) renderKeyHints() string {
 	switch m.focusedPane {
 	case paneSrc:
-		return " j/k:move  enter:toggle dir  /:filter  h/l:focus src/target  tab:focus diff  e:edit source  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
+		return " j/k:move  enter:toggle dir  /:filter  h/l:focus src/target  tab:focus diff  e:edit source  ::command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 	case paneDiff:
-		return " j/k/pgup/pgdn/g/G:scroll diff  /:filter  tab:return to list  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
+		return " j/k/pgup/pgdn/g/G:scroll diff  /:filter  tab:return to list  ::command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 	default:
 		if m.listMode == listModeManaged {
-			return " j/k:move  enter:toggle dir  /:filter  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src  e:edit target  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
+			return " j/k:move  enter:toggle dir  /:filter  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src  e:edit target  ::command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 		}
-		return " j/k:move  enter:toggle dir  /:filter  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src/track  d:delete unmanaged  e:edit  !:command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
+		return " j/k:move  enter:toggle dir  /:filter  h/l:focus src/target  tab:focus diff  space:queue  a:apply  i:add->src/track  d:delete unmanaged  e:edit  ::command  m:mode  1/2/3:apply src  r:refresh  ?:help  q:quit"
 	}
 }
 
@@ -137,7 +137,7 @@ Modes:
   all           Managed entries with diffs plus unmanaged (target-only) paths
   m             Toggle managed / all list mode
   1 / 2 / 3     Select apply source: working tree / staged / HEAD
-  !             Enter a custom shell command for the selected entry
+  :             Open the custom shell command prompt for the selected entry
 
 Keybindings:
   j / down      Move down in src/target or scroll diff
@@ -166,6 +166,11 @@ Shell command context:
   LAZYCHEZMOI_TARGET_KIND
   LAZYCHEZMOI_APPLY_SOURCE
   LAZYCHEZMOI_LIST_MODE
+
+Shell command prompt:
+  enter         Run the current command immediately
+  down / up     Select older / newer command history
+  esc           Close the prompt
 
 Diff pane scrolling:
   pgdn/pgup     Page down / page up
@@ -564,25 +569,52 @@ func (m Model) renderConfirmModal() string {
 }
 
 func (m Model) renderCommandInputModal() string {
-	entry := m.selectedEntry()
-	targetPath := "(no entry selected)"
-	if entry != nil {
-		targetPath = entry.TargetPath
+	inputWidth := min(76, max(34, m.width-18))
+	input := m.commandInput
+	input.Width = max(16, inputWidth-4)
+
+	historyLines := m.renderCommandHistoryLines(5)
+	historyBody := "No command history yet."
+	if len(historyLines) > 0 {
+		historyBody = strings.Join(historyLines, "\n")
 	}
 
 	body := lipgloss.JoinVertical(
 		lipgloss.Left,
 		modalTitleStyle.Render("Run Shell Command"),
-		modalBodyStyle.Render("Selected target: "+truncatePath(targetPath, 64)),
+		commandInputBoxStyle.Width(inputWidth).Render(input.View()),
 		"",
-		commandInputStyle.Width(min(80, max(36, m.width-12))).Render("! "+m.commandInput),
-		"",
-		modalBodyStyle.Render("The command runs in your shell and receives LAZYCHEZMOI_* environment variables."),
-		modalBodyStyle.Render("enter: confirm    esc: cancel"),
+		modalBodyStyle.Render("History"),
+		commandHistoryBoxStyle.Width(inputWidth).Render(historyBody),
 	)
 
 	modalWidth := min(88, max(44, m.width-8))
 	return modalStyle.Width(modalWidth).Render(body)
+}
+
+func (m Model) renderCommandHistoryLines(limit int) []string {
+	if len(m.commandHistory) == 0 || limit <= 0 {
+		return nil
+	}
+
+	start := 0
+	if m.commandHistoryIndex >= limit {
+		start = m.commandHistoryIndex - limit + 1
+	}
+
+	end := min(len(m.commandHistory), start+limit)
+	lines := make([]string, 0, end-start)
+	for idx := start; idx < end; idx++ {
+		prefix := "  "
+		style := commandHistoryStyle
+		if idx == m.commandHistoryIndex {
+			prefix = "> "
+			style = commandHistorySelectedStyle
+		}
+		lines = append(lines, style.Render(prefix+truncateText(m.commandHistory[idx], 72)))
+	}
+
+	return lines
 }
 
 func truncatePath(path string, maxWidth int) string {
