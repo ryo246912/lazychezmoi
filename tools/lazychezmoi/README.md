@@ -11,7 +11,7 @@ A terminal UI for [chezmoi](https://www.chezmoi.io/) inspired by lazygit/gitui.
 - Apply one or many target files from `working tree`, `staged`, or `HEAD`
 - Run `chezmoi add` for unmanaged targets or import target-side changes from managed targets back into source state
 - Delete unmanaged targets from the target tree
-- Run a custom shell command with the selected entry exported as `LAZYCHEZMOI_*` environment variables
+- Open a lazygit-style `:` shell command prompt with persistent history and `LAZYCHEZMOI_*` environment variables
 - Open the focused source or target file in your `$EDITOR`
 - Show loading spinners for apply, mode switches, and snapshot preparation
 - Refresh the file list at any time
@@ -60,7 +60,7 @@ lazychezmoi [flags]
 | `a` | Apply queued targets, or the current target if nothing is queued (`managed` mode) |
 | `i` | Run `chezmoi add` for the selected target: update source from target (`managed`) or start tracking the target (`all`) |
 | `d` | Delete the current unmanaged target after confirmation (`all` mode) |
-| `!` | Enter a custom shell command for the selected entry |
+| `:` | Open the shell command prompt for the selected entry |
 | `e` | Open the focused `src` or `target` file in `$EDITOR` |
 | Mouse click / wheel | Focus the clicked pane; clicking or scrolling a `src` / `target` row also selects it |
 | `pgup` / `pgdn` / `g` / `G` | Scroll the focused diff |
@@ -78,6 +78,12 @@ Custom shell commands receive these environment variables:
 - `LAZYCHEZMOI_TARGET_KIND`
 - `LAZYCHEZMOI_APPLY_SOURCE`
 - `LAZYCHEZMOI_LIST_MODE`
+
+Inside the shell command prompt:
+
+- `enter`: run the current command immediately
+- `down` / `up`: browse command history
+- `esc`: close the prompt without running a command
 
 ## Requirements
 
