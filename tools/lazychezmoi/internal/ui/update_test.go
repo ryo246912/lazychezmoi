@@ -385,6 +385,66 @@ func TestColonOpensCommandPrompt(t *testing.T) {
 	}
 }
 
+func TestCommandPromptRendersStandaloneBody(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+
+	next, _ := m.Update(keyRunes(":"))
+	m = next.(Model)
+
+	view := xansi.Strip(m.View())
+	if !strings.Contains(view, "Run Shell Command") {
+		t.Fatalf("command modal missing: %q", view)
+	}
+	if strings.Contains(view, "src (1 rows)") {
+		t.Fatalf("command modal should not render list panes behind the modal: %q", view)
+	}
+	if !strings.Contains(view, "enter:run  down/up:history  esc:cancel") {
+		t.Fatalf("footer hint missing while entering command: %q", view)
+	}
+}
+
+func TestCommandPromptClearsUnderlyingColumns(t *testing.T) {
+	m := newTestModel([]model.Entry{
+		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+	})
+
+	next, _ := m.Update(keyRunes(":"))
+	m = next.(Model)
+
+	view := xansi.Strip(m.View())
+	for _, line := range strings.Split(view, "\n") {
+		if !strings.Contains(line, "Run Shell Command") {
+			continue
+		}
+
+		runes := []rune(line)
+		leftBorder, rightBorder := -1, -1
+		for i, r := range runes {
+			if r != '║' {
+				continue
+			}
+			if leftBorder == -1 {
+				leftBorder = i
+			}
+			rightBorder = i
+		}
+		if leftBorder <= 0 || rightBorder <= leftBorder {
+			t.Fatalf("unexpected modal line: %q", line)
+		}
+		if strings.TrimSpace(string(runes[:leftBorder])) != "" {
+			t.Fatalf("left side of modal row should be blank: %q", line)
+		}
+		if strings.TrimSpace(string(runes[rightBorder+1:])) != "" {
+			t.Fatalf("right side of modal row should be blank: %q", line)
+		}
+		return
+	}
+
+	t.Fatalf("overlay row with command modal title not found: %q", view)
+}
+
 func TestCommandPromptRunsShellImmediately(t *testing.T) {
 	m := newTestModel([]model.Entry{
 		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
@@ -751,23 +811,26 @@ func TestSelectedRowStylesPath(t *testing.T) {
 	}
 }
 
-func TestConfirmModalOverlaysMainView(t *testing.T) {
+func TestConfirmModalRendersStandaloneBody(t *testing.T) {
 	m := newTestModel([]model.Entry{
 		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
 	})
 	m.state = stateConfirming
 	m.confirmAction = pendingAction{kind: actionAdd, entry: m.entries[0]}
 
-	view := m.View()
+	view := xansi.Strip(m.View())
 	if !strings.Contains(view, "Copy Current Target Into Source?") {
 		t.Fatalf("confirm modal missing: %q", view)
 	}
-	if !strings.Contains(view, "src (1 rows)") {
-		t.Fatalf("main view should remain visible behind modal: %q", view)
+	if strings.Contains(view, "src (1 rows)") {
+		t.Fatalf("confirm body should not render list panes behind the modal: %q", view)
+	}
+	if !strings.Contains(view, "y:confirm  n/esc:cancel") {
+		t.Fatalf("footer hint missing while confirming: %q", view)
 	}
 }
 
-func TestConfirmModalOverlayKeepsUnderlyingColumns(t *testing.T) {
+func TestConfirmModalClearsUnderlyingColumns(t *testing.T) {
 	m := newTestModel([]model.Entry{
 		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
 	})
@@ -780,21 +843,68 @@ func TestConfirmModalOverlayKeepsUnderlyingColumns(t *testing.T) {
 			continue
 		}
 
-		leftBorder := strings.IndexRune(line, '║')
-		rightBorder := strings.LastIndex(line, "║")
+		runes := []rune(line)
+		leftBorder, rightBorder := -1, -1
+		for i, r := range runes {
+			if r != '║' {
+				continue
+			}
+			if leftBorder == -1 {
+				leftBorder = i
+			}
+			rightBorder = i
+		}
 		if leftBorder <= 0 || rightBorder <= leftBorder {
 			t.Fatalf("unexpected modal line: %q", line)
 		}
-		if strings.TrimSpace(line[:leftBorder]) == "" {
-			t.Fatalf("left side of overlay row was cleared: %q", line)
+		if strings.TrimSpace(string(runes[:leftBorder])) != "" {
+			t.Fatalf("left side of modal row should be blank: %q", line)
 		}
-		if strings.TrimSpace(line[rightBorder+1:]) == "" {
-			t.Fatalf("right side of overlay row was cleared: %q", line)
+		if strings.TrimSpace(string(runes[rightBorder+1:])) != "" {
+			t.Fatalf("right side of modal row should be blank: %q", line)
 		}
 		return
 	}
 
 	t.Fatalf("overlay row with modal title not found: %q", view)
+}
+
+func TestConfirmModalCancelReturnsToMainView(t *testing.T) {
+	testCases := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{name: "n key", key: keyRunes("n")},
+		{name: "esc key", key: keyEsc()},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel([]model.Entry{
+				{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+			})
+
+			next, _ := m.Update(keyRunes("i"))
+			m = next.(Model)
+			if m.state != stateConfirming {
+				t.Fatalf("state = %v, want confirming", m.state)
+			}
+
+			next, _ = m.Update(tc.key)
+			m = next.(Model)
+			if m.state != stateNormal {
+				t.Fatalf("state = %v, want normal", m.state)
+			}
+
+			view := xansi.Strip(m.View())
+			if strings.Contains(view, "Copy Current Target Into Source?") {
+				t.Fatalf("confirm modal should be closed: %q", view)
+			}
+			if !strings.Contains(view, "src (1 rows)") {
+				t.Fatalf("main view should return after cancel: %q", view)
+			}
+		})
+	}
 }
 
 func TestHeaderShowsLoadingIndicator(t *testing.T) {
@@ -875,6 +985,10 @@ func keyTab() tea.KeyMsg {
 
 func keyEnter() tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyEnter}
+}
+
+func keyEsc() tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyEsc}
 }
 
 func mouseLeftPress(x, y int) tea.MouseMsg {
