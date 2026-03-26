@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -147,7 +148,7 @@ func (c *Client) writeHeadSnapshot(rootDir, repoRoot string) error {
 	reader := tar.NewReader(bytes.NewReader(archive))
 	for {
 		header, err := reader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -166,7 +167,7 @@ func (c *Client) writeHeadSnapshot(rootDir, repoRoot string) error {
 			if err := os.MkdirAll(targetPath, os.FileMode(header.Mode)); err != nil {
 				return fmt.Errorf("create dir %s: %w", targetPath, err)
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 				return fmt.Errorf("create parent dir for %s: %w", targetPath, err)
 			}

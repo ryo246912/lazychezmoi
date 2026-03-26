@@ -245,10 +245,7 @@ type listPaneMetrics struct {
 func (m Model) layout() uiLayout {
 	headerH := lipgloss.Height(m.renderHeader())
 	footerH := lipgloss.Height(m.renderFooter())
-	contentH := m.height - headerH - footerH
-	if contentH < 2 {
-		contentH = 2
-	}
+	contentH := max(2, m.height-headerH-footerH)
 
 	leftW := m.width / 3
 	rightW := m.width - leftW
@@ -280,8 +277,7 @@ func (m Model) layout() uiLayout {
 
 func (m Model) listPaneTitle(kind paneKind) string {
 	title := "src"
-	switch kind {
-	case paneTarget:
+	if kind == paneTarget {
 		if m.listMode == listModeManaged {
 			title = "target (apply queue)"
 		} else {
@@ -303,14 +299,8 @@ func (m Model) listPaneTitle(kind paneKind) string {
 func (m Model) listPaneMetrics(kind paneKind, rect paneRect) listPaneMetrics {
 	title := m.listPaneTitle(kind)
 	titleHeight := lipgloss.Height(inactiveTitleStyle.Render(title))
-	listHeight := rect.Height - titleHeight - 2
-	if listHeight < 1 {
-		listHeight = 1
-	}
-	listWidth := rect.Width - 2
-	if listWidth < 1 {
-		listWidth = 1
-	}
+	listHeight := max(1, rect.Height-titleHeight-2)
+	listWidth := max(1, rect.Width-2)
 
 	offset := 0
 	if m.cursor >= listHeight {
@@ -468,7 +458,7 @@ func (m *Model) reconcileSelections() {
 }
 
 func (m *Model) removeTargets(targetPaths ...string) bool {
-	if len(targetPaths) == 0 {
+	if len(targetPaths) == 0 || len(m.entries) == 0 {
 		return false
 	}
 

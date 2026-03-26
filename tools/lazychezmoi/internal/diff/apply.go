@@ -133,10 +133,7 @@ func ApplyWithConflicts(src []byte, patch string) ([]byte, bool) {
 					// Conflict: source differs from rendered (e.g. template variable).
 					// Emit conflict markers so the user can resolve manually.
 					hasConflicts = true
-					end := srcIdx + len(removed)
-					if end > len(srcLines) {
-						end = len(srcLines)
-					}
+					end := min(srcIdx+len(removed), len(srcLines))
 					out = append(out, "<<<<<<< source (template)")
 					out = append(out, srcLines[srcIdx:end]...)
 					out = append(out, "=======")

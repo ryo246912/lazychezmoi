@@ -120,8 +120,20 @@ func TestEditUsesFocusedPanePath(t *testing.T) {
 
 func TestTargetSelectionAndBatchApplyConfirmation(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.gitconfig",
+		},
 	})
 
 	firstTarget := m.selectedEntry().TargetPath
@@ -185,7 +197,13 @@ func TestUnmanagedActionsEnterConfirmation(t *testing.T) {
 
 func TestManagedAddEntersConfirmation(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
 	})
 
 	next, _ := m.Update(keyRunes("i"))
@@ -263,8 +281,20 @@ func TestSuccessfulActionsUpdateEntriesImmediately(t *testing.T) {
 				targets: []string{"/dst/.zshrc"},
 			},
 			entries: []model.Entry{
-				{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
-				{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+				{
+					Kind:       model.EntryManaged,
+					SourceCode: model.StatusModified,
+					TargetCode: model.StatusModified,
+					TargetType: model.TargetFile,
+					TargetPath: "/dst/.zshrc",
+				},
+				{
+					Kind:       model.EntryManaged,
+					SourceCode: model.StatusModified,
+					TargetCode: model.StatusModified,
+					TargetType: model.TargetFile,
+					TargetPath: "/dst/.gitconfig",
+				},
 			},
 			wantTargets: []string{"/dst/.gitconfig"},
 			wantStatus:  "Applied 1 file(s) from working tree",
@@ -273,12 +303,30 @@ func TestSuccessfulActionsUpdateEntriesImmediately(t *testing.T) {
 			name:     "managed add removes target immediately",
 			listMode: listModeManaged,
 			action: pendingAction{
-				kind:  actionAdd,
-				entry: model.Entry{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+				kind: actionAdd,
+				entry: model.Entry{
+					Kind:       model.EntryManaged,
+					SourceCode: model.StatusModified,
+					TargetCode: model.StatusModified,
+					TargetType: model.TargetFile,
+					TargetPath: "/dst/.zshrc",
+				},
 			},
 			entries: []model.Entry{
-				{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
-				{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+				{
+					Kind:       model.EntryManaged,
+					SourceCode: model.StatusModified,
+					TargetCode: model.StatusModified,
+					TargetType: model.TargetFile,
+					TargetPath: "/dst/.zshrc",
+				},
+				{
+					Kind:       model.EntryManaged,
+					SourceCode: model.StatusModified,
+					TargetCode: model.StatusModified,
+					TargetType: model.TargetFile,
+					TargetPath: "/dst/.gitconfig",
+				},
 			},
 			wantTargets: []string{"/dst/.gitconfig"},
 			wantStatus:  "Updated source state from /dst/.zshrc",
@@ -337,9 +385,27 @@ func TestSuccessfulActionsUpdateEntriesImmediately(t *testing.T) {
 
 func TestPartialApplyFailureRemovesCompletedTargetsImmediately(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.tmux.conf"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.gitconfig",
+		},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.tmux.conf",
+		},
 	})
 
 	next, _ := m.Update(actionErrMsg{
@@ -365,7 +431,13 @@ func TestPartialApplyFailureRemovesCompletedTargetsImmediately(t *testing.T) {
 
 func TestColonOpensCommandPrompt(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
 	})
 
 	next, _ := m.Update(keyRunes(":"))
@@ -598,7 +670,13 @@ func TestCommandHistoryLoadFailureDoesNotBreakModel(t *testing.T) {
 
 func TestSourceModeSwitchStartsSnapshotPreparation(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
 	})
 
 	next, _ := m.Update(keyRunes("2"))
@@ -614,8 +692,20 @@ func TestSourceModeSwitchStartsSnapshotPreparation(t *testing.T) {
 
 func TestDiffFocusScrollsViewport(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.gitconfig",
+		},
 	})
 	m.focusedPane = paneDiff
 	selectedTarget := m.selectedEntry().TargetPath
@@ -654,7 +744,13 @@ func TestDiffFocusScrollsViewport(t *testing.T) {
 
 func TestTabTogglesDiffFocusAndRestoresLastListPane(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
 	})
 
 	next, _ := m.Update(keyRunes("h"))
@@ -688,8 +784,20 @@ func TestTabTogglesDiffFocusAndRestoresLastListPane(t *testing.T) {
 
 func TestMouseClickSelectsRowAndFocusesPane(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.gitconfig"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.gitconfig",
+		},
 	})
 
 	targetMetrics := m.listPaneMetrics(paneTarget, m.layout().rect(paneTarget))
@@ -715,7 +823,13 @@ func TestMouseClickSelectsRowAndFocusesPane(t *testing.T) {
 
 func TestMouseClickFocusesDiffPane(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
 	})
 
 	layout := m.layout()
@@ -921,7 +1035,13 @@ func TestHeaderShowsLoadingIndicator(t *testing.T) {
 
 func TestStaleDiffResultsAreIgnored(t *testing.T) {
 	m := newTestModel([]model.Entry{
-		{Kind: model.EntryManaged, SourceCode: model.StatusModified, TargetCode: model.StatusModified, TargetType: model.TargetFile, TargetPath: "/dst/.zshrc"},
+		{
+			Kind:       model.EntryManaged,
+			SourceCode: model.StatusModified,
+			TargetCode: model.StatusModified,
+			TargetType: model.TargetFile,
+			TargetPath: "/dst/.zshrc",
+		},
 	})
 	m.entryGeneration = 1
 	_ = m.requestDiffLoadCmd("/dst/.zshrc")
@@ -997,7 +1117,6 @@ func mouseLeftPress(x, y int) tea.MouseMsg {
 		Y:      y,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionPress,
-		Type:   tea.MouseLeft,
 	}
 }
 

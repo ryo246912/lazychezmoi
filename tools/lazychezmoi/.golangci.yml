@@ -1,0 +1,85 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: all
+  disable:
+    - cyclop
+    - depguard
+    - dupl
+    - err113
+    - exhaustive
+    - exhaustruct
+    - funlen
+    - gochecknoglobals
+    - gochecknoinits
+    - gocognit
+    - gocyclo
+    - goconst
+    - funcorder
+    - godot
+    - godox
+    - gosec
+    - ireturn
+    - lll
+    - maintidx
+    - mnd
+    - musttag
+    - nilnil
+    - noctx
+    - noinlineerr
+    - nlreturn
+    - nonamedreturns
+    - paralleltest
+    - perfsprint
+    - prealloc
+    - recvcheck
+    - revive
+    - tagalign
+    - tagliatelle
+    - testpackage
+    - varnamelen
+    - wrapcheck
+    - wsl
+    - wsl_v5
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - path: _test\.go$
+        linters:
+          - forcetypeassert
+
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+    - golines
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(lazychezmoi)
+    gofumpt:
+      extra-rules: true
+      module-path: lazychezmoi
+    goimports:
+      local-prefixes:
+        - lazychezmoi
+    golines:
+      max-len: 128
+      tab-len: 4
+  exclusions:
+    generated: lax
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

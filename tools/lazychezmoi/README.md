@@ -30,6 +30,28 @@ Or download a release binary from the [Releases](../../releases) page.
 lazychezmoi [flags]
 ```
 
+## Development
+
+Run the shared development tasks from the repository root:
+
+```sh
+mise run fmt
+mise run lint
+mise run lint-fix
+mise run test
+mise run vet
+mise run govulncheck
+mise run check
+mise run build
+mise run release-snapshot
+```
+
+`check` mirrors the CI entry points for workflow lint, Go lint, tests, vet,
+vulnerability scanning, and `go mod tidy` drift detection.
+
+`govulncheck` runs with `GOTOOLCHAIN=go1.25.8` so the scan itself is not blocked
+by the current Go standard library advisory fixed after Go 1.25.5.
+
 ### Flags
 
 | Flag | Default | Description |
