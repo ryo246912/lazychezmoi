@@ -89,3 +89,14 @@ Inside the shell command prompt:
 
 - Go 1.22+
 - chezmoi installed and configured
+
+## Release Flow
+
+This project uses [tagpr](https://github.com/Songmu/tagpr) for automated releases.
+
+1. When changes are pushed to the `main` branch, tagpr automatically creates or updates a pull request for the next release.
+2. The pull request includes a version bump and a changelog update.
+3. Merging the pull request will:
+    - Create a git tag for the new version.
+    - Create a GitHub Release.
+    - Trigger the `release-lazychezmoi` workflow to build and publish artifacts.
