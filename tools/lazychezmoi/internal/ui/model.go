@@ -10,9 +10,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"lazychezmoi/internal/chezmoi"
-	gitmode "lazychezmoi/internal/git"
-	"lazychezmoi/internal/model"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/chezmoi"
+	gitmode "github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/git"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/model"
 )
 
 type paneKind int

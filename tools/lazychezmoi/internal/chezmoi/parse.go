@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"strings"
 
-	"lazychezmoi/internal/model"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/model"
 )
 
 // ParseStatus parses chezmoi status output

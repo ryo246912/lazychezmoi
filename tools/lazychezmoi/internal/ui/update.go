@@ -13,9 +13,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"lazychezmoi/internal/diff"
-	gitmode "lazychezmoi/internal/git"
-	"lazychezmoi/internal/model"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/diff"
+	gitmode "github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/git"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/model"
 )
 
 type entriesLoadedMsg struct {
