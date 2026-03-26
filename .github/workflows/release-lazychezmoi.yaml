@@ -11,22 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    defaults:
-      run:
-        working-directory: tools/lazychezmoi
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
-          go-version-file: tools/lazychezmoi/go.mod
-          cache-dependency-path: tools/lazychezmoi/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: latest
           args: release --clean
-          workdir: tools/lazychezmoi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
