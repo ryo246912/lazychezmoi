@@ -2,13 +2,13 @@
 go = "1.22"
 
 [tasks."test-lazychezmoi"]
-run = "cd tools/lazychezmoi && go test ./..."
+run = "go test ./..."
 description = "Run lazychezmoi tests"
 
 [tasks."build-lazychezmoi"]
-run = "cd tools/lazychezmoi && go build ./cmd/lazychezmoi"
+run = "go build ./cmd/lazychezmoi"
 description = "Build lazychezmoi binary"
 
 [tasks."release-lazychezmoi-snapshot"]
-run = "cd tools/lazychezmoi && goreleaser release --snapshot --clean"
+run = "goreleaser release --snapshot --clean"
 description = "Build lazychezmoi snapshot release"

@@ -1,4 +1,4 @@
 [tagpr]
     releaseBranch = main
-    versionFile = tools/lazychezmoi/cmd/lazychezmoi/main.go
+    versionFile = cmd/lazychezmoi/main.go
     vPrefix = true

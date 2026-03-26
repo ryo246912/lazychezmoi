@@ -19,7 +19,7 @@ A terminal UI for [chezmoi](https://www.chezmoi.io/) inspired by lazygit/gitui.
 ## Installation
 
 ```sh
-go install github.com/ryo246912/lazychezmoi/tools/lazychezmoi/cmd/lazychezmoi@latest
+go install github.com/ryo246912/lazychezmoi/cmd/lazychezmoi@latest
 ```
 
 Or download a release binary from the [Releases](../../releases) page.

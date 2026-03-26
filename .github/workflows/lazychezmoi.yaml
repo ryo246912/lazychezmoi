@@ -3,27 +3,18 @@ name: lazychezmoi
 on:
   push:
     branches: [main]
-    paths:
-      - "tools/lazychezmoi/**"
-      - ".github/workflows/lazychezmoi.yaml"
   pull_request:
     branches: [main]
-    paths:
-      - "tools/lazychezmoi/**"
-      - ".github/workflows/lazychezmoi.yaml"
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: tools/lazychezmoi
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: tools/lazychezmoi/go.mod
-          cache-dependency-path: tools/lazychezmoi/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Build
         run: go build ./...
       - name: Test
