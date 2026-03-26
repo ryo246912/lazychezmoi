@@ -3,7 +3,7 @@ name: release-lazychezmoi
 on:
   push:
     tags:
-      - "lazychezmoi/v*"
+      - "v*"
   workflow_dispatch:
 
 jobs:
