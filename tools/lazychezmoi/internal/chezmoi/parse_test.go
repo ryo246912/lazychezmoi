@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"lazychezmoi/internal/model"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/model"
 )
 
 func TestParseStatus(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	"lazychezmoi/internal/model"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/model"
 )
 
 func (m Model) View() string {

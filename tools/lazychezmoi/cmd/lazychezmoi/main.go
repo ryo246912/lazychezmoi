@@ -7,8 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"lazychezmoi/internal/chezmoi"
-	"lazychezmoi/internal/ui"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/chezmoi"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/ui"
 )
 
 var version = "dev"

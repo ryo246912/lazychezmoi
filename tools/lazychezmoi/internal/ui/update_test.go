@@ -11,8 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	gitmode "lazychezmoi/internal/git"
-	"lazychezmoi/internal/model"
+	gitmode "github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/git"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/model"
 )
 
 func TestEditUsesFocusedPanePath(t *testing.T) {

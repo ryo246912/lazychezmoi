@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"lazychezmoi/internal/model"
+	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/model"
 )
 
 const defaultTimeout = 30 * time.Second

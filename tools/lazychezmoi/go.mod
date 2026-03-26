@@ -1,4 +1,4 @@
-module lazychezmoi
+module github.com/ryo246912/lazychezmoi/tools/lazychezmoi
 
 go 1.22.0
 
