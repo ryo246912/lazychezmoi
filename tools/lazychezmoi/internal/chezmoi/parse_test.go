@@ -9,11 +9,11 @@ import (
 )
 
 func TestParseStatus(t *testing.T) {
-	input := []byte("MM /home/user/.bashrc\nA  /home/user/.vimrc\n D /home/user/.zshrc\n")
+	input := []byte("MM /home/user/.bashrc\nA  /home/user/.vimrc\n D /home/user/.zshrc\n R /home/user/.setup.sh\n")
 	entries := ParseStatus(input)
 
-	if len(entries) != 3 {
-		t.Fatalf("expected 3 entries, got %d", len(entries))
+	if len(entries) != 4 {
+		t.Fatalf("expected 4 entries, got %d", len(entries))
 	}
 
 	if entries[0].SourceCode != model.StatusModified || entries[0].TargetCode != model.StatusModified {
@@ -31,6 +31,13 @@ func TestParseStatus(t *testing.T) {
 	}
 	if entries[1].TargetPath != "/home/user/.vimrc" {
 		t.Errorf("entry 1 path: got %q", entries[1].TargetPath)
+	}
+
+	if entries[3].TargetCode != model.StatusScript {
+		t.Errorf("entry 3: expected R, got %c", entries[3].TargetCode)
+	}
+	if entries[3].TargetType != model.TargetScript {
+		t.Errorf("entry 3: expected TargetScript, got %v", entries[3].TargetType)
 	}
 }
 

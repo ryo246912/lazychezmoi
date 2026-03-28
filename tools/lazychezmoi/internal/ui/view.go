@@ -304,6 +304,8 @@ func (m Model) renderStatusBadge(row listRow, current, focused bool) string {
 				style = statusModStyle
 			case model.StatusDeleted:
 				style = statusDeletedStyle
+			case model.StatusScript:
+				style = statusScriptStyle
 			}
 		}
 	}
@@ -325,9 +327,15 @@ func (m Model) statusLabel(entry model.Entry) string {
 			return "UD"
 		case model.TargetSymlink:
 			return "UL"
+		case model.TargetScript:
+			return "SC"
 		default:
 			return "UM"
 		}
+	}
+	switch entry.TargetType {
+	case model.TargetScript:
+		return "SC"
 	}
 	return string([]byte{byte(entry.SourceCode), byte(entry.TargetCode)})
 }

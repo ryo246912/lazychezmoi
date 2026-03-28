@@ -13,6 +13,7 @@ const (
 	StatusAdded    StatusCode = 'A'
 	StatusModified StatusCode = 'M'
 	StatusDeleted  StatusCode = 'D'
+	StatusScript   StatusCode = 'R'
 )
 
 type EntryKind int
@@ -38,6 +39,7 @@ const (
 	TargetFile
 	TargetDirectory
 	TargetSymlink
+	TargetScript
 )
 
 func (k TargetKind) String() string {
@@ -48,6 +50,8 @@ func (k TargetKind) String() string {
 		return "directory"
 	case TargetSymlink:
 		return "symlink"
+	case TargetScript:
+		return "script"
 	default:
 		return "unknown"
 	}
@@ -67,7 +71,7 @@ func (e Entry) HasTargetDiff() bool {
 }
 
 func (e Entry) CanApply() bool {
-	return e.HasTargetDiff()
+	return e.HasTargetDiff() || (e.Kind == EntryManaged && e.TargetType == TargetScript)
 }
 
 // IsTemplate returns true when the source file is a chezmoi template (.tmpl).
@@ -80,7 +84,7 @@ func (e Entry) CanAdd() bool {
 	if e.Kind == EntryUnmanaged {
 		return true
 	}
-	return e.HasTargetDiff()
+	return e.HasTargetDiff() || e.TargetType == TargetScript
 }
 
 func (e Entry) CanDeleteTarget() bool {
@@ -92,7 +96,7 @@ func (e Entry) CanEditSource() bool {
 }
 
 func (e Entry) CanEditTarget() bool {
-	return e.TargetType != TargetDirectory
+	return e.TargetType != TargetDirectory && e.TargetType != TargetScript
 }
 
 func (e Entry) StatusLabel() string {
@@ -106,6 +110,8 @@ func (e Entry) StatusLabel() string {
 		return "modified"
 	case StatusDeleted:
 		return "deleted"
+	case StatusScript:
+		return "runnable"
 	default:
 		if e.SourceCode == StatusAdded {
 			return "new"
