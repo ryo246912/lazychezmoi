@@ -25,12 +25,18 @@ func ParseStatus(data []byte) []model.Entry {
 		if path == "" {
 			continue
 		}
+
+		targetType := model.TargetFile
+		if targetCode == model.StatusScript {
+			targetType = model.TargetScript
+		}
+
 		entries = append(entries, model.Entry{
 			Kind:       model.EntryManaged,
 			SourceCode: sourceCode,
 			TargetCode: targetCode,
 			TargetPath: path,
-			TargetType: model.TargetFile,
+			TargetType: targetType,
 		})
 	}
 	return entries
