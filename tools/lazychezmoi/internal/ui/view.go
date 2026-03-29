@@ -36,6 +36,8 @@ func (m Model) View() string {
 		body = centeredModalBody(m.renderConfirmModal(), m.width, contentH)
 	case stateCommandInput:
 		body = centeredModalBody(m.renderCommandInputModal(), m.width, contentH)
+	case stateError:
+		body = centeredModalBody(m.renderErrorModal(), m.width, contentH)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
@@ -93,6 +95,8 @@ func (m Model) renderFooter() string {
 		lines = append(lines, "y:confirm  n/esc:cancel")
 	case stateCommandInput:
 		lines = append(lines, "enter:run  down/up:history  esc:cancel")
+	case stateError:
+		lines = append(lines, "enter/esc/q:close")
 	case stateFilterInput:
 		lines = append(lines, filterStyle.Render("/"+m.filterInput))
 		lines = append(lines, "enter:apply  esc:clear")
@@ -643,4 +647,47 @@ func truncateText(text string, maxWidth int) string {
 		return text
 	}
 	return text[:maxWidth-3] + "..."
+}
+
+func (m Model) renderErrorModal() string {
+	title := "Error"
+	var lines []string
+
+	msg := m.lastActionErr
+	switch msg.action.kind {
+	case actionApply:
+		title = "Apply Failed"
+	case actionAdd:
+		title = "Add Failed"
+	case actionDelete:
+		title = "Delete Failed"
+	case actionShell:
+		title = "Shell Command Failed"
+	case actionPatchSource, actionPatchSourceConfirm:
+		title = "Patch Failed"
+	}
+
+	if msg.failedTarget != "" {
+		lines = append(lines, "Target:", truncatePath(msg.failedTarget, 64), "")
+	}
+
+	errMsg := msg.err.Error()
+	// Split long error messages into multiple lines
+	maxLineLen := 64
+	for len(errMsg) > maxLineLen {
+		lines = append(lines, errMsg[:maxLineLen])
+		errMsg = errMsg[maxLineLen:]
+	}
+	lines = append(lines, errMsg)
+
+	lines = append(lines, "", "enter / esc / q: close")
+
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		modalTitleStyle.Foreground(colorRed).Render(title),
+		modalBodyStyle.Render(strings.Join(lines, "\n")),
+	)
+
+	modalWidth := min(80, max(36, m.width-8))
+	return modalStyle.BorderForeground(colorRed).Width(modalWidth).Render(body)
 }

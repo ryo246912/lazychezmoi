@@ -32,6 +32,7 @@ const (
 	stateFilterInput
 	stateHelp
 	stateRunningAction
+	stateError
 )
 
 type listMode int
@@ -163,6 +164,7 @@ type Model struct {
 	spinner    spinner.Model
 	state      appState
 	statusMsg  string
+	lastActionErr actionErrMsg
 	loadErr    error
 	openEditor func(string) tea.Cmd
 	runShell   shellCommandRunner
