@@ -517,7 +517,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.startEntriesReload(""))
 
 	case actionErrMsg:
-		m.state = stateNormal
+		m.state = stateError
+		m.lastActionErr = msg
 		m.confirmAction = pendingAction{}
 		if msg.action.kind == actionApply && msg.completed > 0 {
 			m.applySuccessfulAction(pendingAction{
@@ -528,7 +529,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.applySourceMode.RequiresSnapshot() {
 			m.invalidateSnapshot()
 		}
-		m.statusMsg = actionFailureMessage(msg, m.applySourceMode)
 		cmds = append(cmds, m.startEntriesReload(""))
 
 	case editorErrMsg:
@@ -573,6 +573,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch m.state {
+		case stateError:
+			switch msg.String() {
+			case "esc", "enter", "q":
+				m.state = stateNormal
+				m.statusMsg = ""
+			}
+
 		case stateHelp:
 			if msg.String() == "?" || msg.String() == "q" || msg.String() == "esc" {
 				m.state = stateNormal
