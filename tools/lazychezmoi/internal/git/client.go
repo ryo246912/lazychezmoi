@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const defaultTimeout = 10 * time.Second
+const defaultTimeout = 5 * time.Second
 
 type SourceMode int
 
