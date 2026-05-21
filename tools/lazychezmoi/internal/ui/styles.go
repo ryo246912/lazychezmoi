@@ -44,6 +44,7 @@ var (
 	statusAddedStyle     = lipgloss.NewStyle().Foreground(colorGreen)
 	statusModStyle       = lipgloss.NewStyle().Foreground(colorYellow)
 	statusDeletedStyle   = lipgloss.NewStyle().Foreground(colorRed)
+	statusScriptStyle    = lipgloss.NewStyle().Foreground(colorCyan)
 	statusDirStyle       = lipgloss.NewStyle().Foreground(colorBlue).Bold(true)
 	statusUnmanagedStyle = lipgloss.NewStyle().
 				Foreground(colorCyan).

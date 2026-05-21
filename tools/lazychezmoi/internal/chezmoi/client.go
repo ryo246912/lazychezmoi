@@ -34,7 +34,7 @@ func New(binary, source, destination string, exclude []string) *Client {
 }
 
 func (c *Client) Status() ([]model.Entry, error) {
-	args := []string{"status", "--include", "files", "--path-style", "absolute"}
+	args := []string{"status", "--include", "files,scripts,symlinks", "--path-style", "absolute"}
 	if len(c.Exclude) > 0 {
 		args = append(args, "--exclude", strings.Join(c.Exclude, ","))
 	}

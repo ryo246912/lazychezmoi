@@ -161,6 +161,25 @@ func (m Model) loadDiffCmd(entry model.Entry, generation, requestID int, applySo
 			client = client.WithSource(snapshotSource)
 		}
 
+		if entry.TargetType == model.TargetScript {
+			rendered, err := client.Cat(entry.TargetPath)
+			if err != nil {
+				return diffErrMsg{
+					targetPath: entry.TargetPath,
+					generation: generation,
+					requestID:  requestID,
+					err:        fmt.Errorf("chezmoi cat: %w", err),
+				}
+			}
+			content := diff.Compute("script (source content)", nil, "rendered script", rendered)
+			return diffLoadedMsg{
+				targetPath: entry.TargetPath,
+				generation: generation,
+				requestID:  requestID,
+				content:    content,
+			}
+		}
+
 		dst, err := os.ReadFile(entry.TargetPath)
 		if err != nil && !os.IsNotExist(err) {
 			return diffErrMsg{
