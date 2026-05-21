@@ -11,7 +11,7 @@ import (
 	"github.com/ryo246912/lazychezmoi/tools/lazychezmoi/internal/model"
 )
 
-const defaultTimeout = 10 * time.Second
+const defaultTimeout = 5 * time.Second
 
 type Client struct {
 	Binary      string
