@@ -1,0 +1,25 @@
+--- tree.go
++++ tree.go
+@@ -62,19 +62,12 @@
+
+ func (m *Model) rebuildRows(anchorKey string) {
+	m.rows = m.buildRows()
+-	switch {
+-	case anchorKey != "":
++	if anchorKey != "" {
+		if idx := m.rowIndex(anchorKey); idx >= 0 {
+			m.cursor = idx
+-			break
+		}
+-		fallthrough
+-	default:
+-		if idx := m.firstEntryRowIndex(); idx >= 0 {
+-			m.cursor = idx
+-		} else {
+-			m.cursor = 0
+-		}
++	} else if idx := m.firstEntryRowIndex(); idx >= 0 {
++		m.cursor = idx
+	}
+	m.clampCursor()
+ }
